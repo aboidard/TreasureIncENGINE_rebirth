@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.smallrye.mutiny.Uni;
 import org.junit.jupiter.api.Test;
+import org.bogomips.treasureInc.engine.user.UserService.CachedSession;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -18,7 +19,7 @@ class CreateUserHandlerTest {
     private final Map<String, CachedSession> store = new HashMap<>();
     private final Set<String> created = new HashSet<>();
 
-    private final UserRepository repo = new UserRepository() {
+    private final UserService.Repository repo = new UserService.Repository() {
         public Uni<UserInfo> login(String pub, String priv) {
             return Uni.createFrom().nullItem();
         }
@@ -41,7 +42,7 @@ class CreateUserHandlerTest {
         }
     };
 
-    private final UserCache cache = new UserCache() {
+    private final UserService.Cache cache = new UserService.Cache() {
         public Uni<CachedSession> get(String k) {
             return Uni.createFrom().item(store.get(k));
         }
@@ -71,7 +72,7 @@ class CreateUserHandlerTest {
         assertTrue(pub.matches("\\d{11}"));
         assertTrue(priv.matches("[A-Za-z0-9]{30}"));
         assertEquals(10000, n.at("/payload/user/money").asInt());
-        assertEquals(Keys.sha256(priv), store.get(pub).keyHash());
+        assertEquals(CachedSession.hashKey(priv), store.get(pub).keyHash());
         assertTrue(created.contains(pub));
     }
 }

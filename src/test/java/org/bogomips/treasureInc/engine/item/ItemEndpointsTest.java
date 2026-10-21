@@ -3,9 +3,12 @@ package org.bogomips.treasureInc.engine.item;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.smallrye.mutiny.Uni;
+import org.bogomips.treasureInc.engine.item.ItemService.ItemList;
+import org.bogomips.treasureInc.engine.item.ItemService.SellResult;
 import org.bogomips.treasureInc.engine.messaging.RequestHandler;
 import org.bogomips.treasureInc.engine.sync.CacheSyncService;
 import org.bogomips.treasureInc.engine.user.*;
+import org.bogomips.treasureInc.engine.user.UserService.CachedSession;
 import org.junit.jupiter.api.Test;
 
 import java.util.*;
@@ -31,7 +34,7 @@ class ItemEndpointsTest {
     private int syncedMoney = -1;
     private int nextId = 0;
 
-    private final ItemRepository itemRepo = new ItemRepository() {
+    private final ItemService.Repository itemRepo = new ItemService.Repository() {
         public Uni<ItemList> findByPublicKey(String pk) {
             dbReads.incrementAndGet();
             return Uni.createFrom().item(PUB.equals(pk) ? new ItemList(true, List.copyOf(dbItems)) : ItemList.unknownUser());
@@ -68,7 +71,7 @@ class ItemEndpointsTest {
         }
     };
 
-    private final ItemCache cache = new ItemCache() {
+    private final ItemService.Cache cache = new ItemService.Cache() {
         public Uni<ItemList> get(String pk) {
             return Uni.createFrom().item(itemCache.get(pk));
         }
@@ -102,7 +105,7 @@ class ItemEndpointsTest {
         }
     };
 
-    private final UserCache userCache = new UserCache() {
+    private final UserService.Cache userCache = new UserService.Cache() {
         public Uni<CachedSession> get(String k) {
             return Uni.createFrom().item(users.get(k));
         }
@@ -122,7 +125,7 @@ class ItemEndpointsTest {
         }
     };
 
-    private final UserRepository userRepo = new UserRepository() {
+    private final UserService.Repository userRepo = new UserService.Repository() {
         public Uni<UserInfo> login(String pub, String priv) {
             return Uni.createFrom().nullItem();
         }
@@ -217,7 +220,7 @@ class ItemEndpointsTest {
 
     @Test
     void syncWritesPendingChangesOncePastMaxAge() throws Exception {
-        users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", Keys.sha256(PRIV)));
+        users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", CachedSession.hashKey(PRIV)));
         JsonNode gen = call(endpoints.generateItemsForUser(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":2}");
         int id1 = gen.at("/payload/items/0/id").asInt();
         int id2 = gen.at("/payload/items/1/id").asInt();
@@ -263,7 +266,7 @@ class ItemEndpointsTest {
 
     @Test
     void sellAndGenerateRunUnderTheUserLock() throws Exception {
-        users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", Keys.sha256(PRIV)));
+        users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", CachedSession.hashKey(PRIV)));
         call(endpoints.generateItemsForUser(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":1}");
         call(endpoints.sellItems(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"items\":[{\"id\":3}]}");
         assertEquals(java.util.List.of(PUB, PUB), lock.locked);
@@ -271,7 +274,7 @@ class ItemEndpointsTest {
 
     @Test
     void cachedMoneyIsNotOverwrittenByDatabaseSale() throws Exception {
-        users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", Keys.sha256(PRIV)));
+        users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", CachedSession.hashKey(PRIV)));
         JsonNode gen = call(endpoints.generateItemsForUser(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":1}");
         int id = gen.at("/payload/items/0/id").asInt();
         int price = gen.at("/payload/items/0/price").asInt();
@@ -285,7 +288,7 @@ class ItemEndpointsTest {
 
     @Test
     void sellGeneratedItemsStaysInRedis() throws Exception {
-        users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", Keys.sha256(PRIV)));
+        users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", CachedSession.hashKey(PRIV)));
         JsonNode gen = call(endpoints.generateItemsForUser(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":2}");
         int id1 = gen.at("/payload/items/0/id").asInt();
         int id2 = gen.at("/payload/items/1/id").asInt();
@@ -305,7 +308,7 @@ class ItemEndpointsTest {
 
     @Test
     void sellMixedAddsRedisValueInOneDbCall() throws Exception {
-        users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", Keys.sha256(PRIV)));
+        users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", CachedSession.hashKey(PRIV)));
         JsonNode gen = call(endpoints.generateItemsForUser(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":1}");
         int id = gen.at("/payload/items/0/id").asInt();
         int price = gen.at("/payload/items/0/price").asInt();
@@ -319,7 +322,7 @@ class ItemEndpointsTest {
 
     @Test
     void sellRemovesFromCacheAndCreditsMoney() throws Exception {
-        users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", Keys.sha256(PRIV)));
+        users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", CachedSession.hashKey(PRIV)));
         RequestHandler get = endpoints.getItems();
         call(get, "{\"user\":\"" + PUB + "\"}");
 

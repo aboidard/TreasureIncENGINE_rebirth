@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.smallrye.mutiny.Uni;
 import org.junit.jupiter.api.Test;
+import org.bogomips.treasureInc.engine.user.UserService.CachedSession;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -17,7 +18,7 @@ class LoginHandlerTest {
     private final AtomicInteger dbCalls = new AtomicInteger();
     private final Map<String, CachedSession> store = new HashMap<>();
 
-    private final UserRepository repo = new UserRepository() {
+    private final UserService.Repository repo = new UserService.Repository() {
         public Uni<UserInfo> login(String pub, String priv) {
             dbCalls.incrementAndGet();
             return Uni.createFrom().item("12345678900".equals(pub) && "secret".equals(priv)
@@ -43,7 +44,7 @@ class LoginHandlerTest {
         }
     };
 
-    private final UserCache cache = new UserCache() {
+    private final UserService.Cache cache = new UserService.Cache() {
         public Uni<CachedSession> get(String k) {
             return Uni.createFrom().item(store.get(k));
         }

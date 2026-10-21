@@ -1,6 +1,5 @@
 package org.bogomips.treasureInc.engine.item;
 
-
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.quarkus.redis.datasource.ReactiveRedisDataSource;
@@ -9,6 +8,7 @@ import io.quarkus.redis.datasource.value.SetArgs;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.bogomips.treasureInc.engine.item.ItemService.ItemList;
 
 import java.util.Collection;
 import java.util.HashSet;
@@ -18,7 +18,7 @@ import java.util.HashSet;
  * public API by users who never logged in cannot grow Redis without bound.
  */
 @ApplicationScoped
-public class RedisItemCache implements ItemCache {
+public class RedisItemCache implements ItemService.Cache {
 
     static final String KEY_PREFIX = "treasure_inc.items.";
     static final String ID_SEQUENCE_KEY = "treasure_inc.items_seq.redis_only";
