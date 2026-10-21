@@ -2,9 +2,8 @@ package org.bogomips.treasureInc.engine.item;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.smallrye.mutiny.Uni;
-import org.bogomips.treasureInc.engine.messaging.Params;
+import org.bogomips.treasureInc.engine.messaging.Protocol;
 import org.bogomips.treasureInc.engine.messaging.RequestHandler;
-import org.bogomips.treasureInc.engine.messaging.Responses;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -30,26 +29,26 @@ abstract class AbstractGetItemsHandler implements RequestHandler {
 
     @Override
     public Uni<Object> handle(JsonNode params) {
-        String publicKey = Params.publicKey(params);
-        Integer page = Params.integer(params, "page", 1);
-        Integer limit = Params.integer(params, "limit", DEFAULT_LIMIT);
+        String publicKey = Protocol.publicKey(params);
+        Integer page = Protocol.integer(params, "page", 1);
+        Integer limit = Protocol.integer(params, "limit", DEFAULT_LIMIT);
         if (publicKey == null || page == null || limit == null || page < 1 || limit < 1 || limit > MAX_LIMIT) {
-            return Uni.createFrom().item(Responses.badRequest());
+            return Uni.createFrom().item(Protocol.badRequest());
         }
         return authorize(publicKey, params).flatMap(ok -> {
             if (!ok) {
-                return Uni.createFrom().item(Responses.unauthorized());
+                return Uni.createFrom().item(Protocol.unauthorized());
             }
             return items.page(publicKey, page, limit).map(result -> {
                 if (result == null) {
-                    return Responses.of(404, "Not Found");
+                    return Protocol.reply(404, "Not Found");
                 }
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("items", result.items().stream().map(ItemInfo::toMap).toList());
                 payload.put("page", result.page());
                 payload.put("limit", result.limit());
                 payload.put("total", result.total());
-                return Responses.of(200, "OK", payload);
+                return Protocol.reply(200, "OK", payload);
             });
         });
     }

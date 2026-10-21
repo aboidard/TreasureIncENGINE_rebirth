@@ -3,9 +3,8 @@ package org.bogomips.treasureInc.engine.item;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
-import org.bogomips.treasureInc.engine.messaging.Params;
+import org.bogomips.treasureInc.engine.messaging.Protocol;
 import org.bogomips.treasureInc.engine.messaging.RequestHandler;
-import org.bogomips.treasureInc.engine.messaging.Responses;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -28,19 +27,19 @@ public class GenerateItemsHandler implements RequestHandler {
 
     @Override
     public Uni<Object> handle(JsonNode params) {
-        String publicKey = Params.publicKey(params);
-        String privateKey = Params.text(params, "private_key");
-        Integer nb = Params.integer(params, "nb", 1);
+        String publicKey = Protocol.publicKey(params);
+        String privateKey = Protocol.text(params, "private_key");
+        Integer nb = Protocol.integer(params, "nb", 1);
         if (publicKey == null || privateKey == null || nb == null || nb < 1 || nb > MAX_ITEMS) {
-            return Uni.createFrom().item(Responses.badRequest());
+            return Uni.createFrom().item(Protocol.badRequest());
         }
         return items.generate(publicKey, privateKey, nb).map(generated -> {
             if (generated == null) {
-                return Responses.unauthorized();
+                return Protocol.unauthorized();
             }
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("items", generated.stream().map(ItemInfo::toMap).toList());
-            return Responses.of(200, "OK", payload);
+            return Protocol.reply(200, "OK", payload);
         });
     }
 }
