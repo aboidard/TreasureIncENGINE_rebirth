@@ -2,15 +2,19 @@ package org.bogomips.treasureInc.engine.messaging;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.regex.Pattern;
 
-/** Typed, null-safe readers for request params. */
-public final class Params {
+/** The wire format seen by handlers: typed, null-safe readers for request params and the standard reply body. */
+public final class Protocol {
 
     private static final Pattern PUBLIC_KEY = Pattern.compile("\\d{11}");
 
-    private Params() {
+    private Protocol() {
     }
+
+    // ---- request params
 
     public static String text(JsonNode params, String field) {
         JsonNode n = params == null ? null : params.get(field);
@@ -33,5 +37,29 @@ public final class Params {
             return defaultValue;
         }
         return n.isIntegralNumber() && n.canConvertToInt() ? n.intValue() : null;
+    }
+
+    // ---- reply body: {status, message, payload}
+
+    public static Object reply(int status, String message, Object payload) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("status", status);
+        r.put("message", message);
+        if (payload != null) {
+            r.put("payload", payload);
+        }
+        return r;
+    }
+
+    public static Object reply(int status, String message) {
+        return reply(status, message, null);
+    }
+
+    public static Object badRequest() {
+        return reply(400, "Bad Request");
+    }
+
+    public static Object unauthorized() {
+        return reply(401, "Unauthorized");
     }
 }

@@ -3,6 +3,7 @@ package org.bogomips.treasureInc.engine.messaging;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -11,7 +12,9 @@ import jakarta.enterprise.inject.Instance;
 import org.jboss.logging.Logger;
 
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * Transport-agnostic core: parses a request envelope, routes it to the {@link RequestHandler}
@@ -21,6 +24,8 @@ import java.util.Map;
 public class RequestDispatcher {
 
     private static final Logger LOG = Logger.getLogger(RequestDispatcher.class);
+    private static final Pattern SENSITIVE = Pattern.compile("(?i).*(private_key|password|secret|token).*");
+    private static final int MAX_LOGGED_JSON_CHARS = 2000;
 
     /** The envelope to publish back; replyId is kept apart for logging. */
     public record Reply(String replyId, String json) {
@@ -55,7 +60,7 @@ public class RequestDispatcher {
         JsonNode payload = root.path("payload");
         String type = payload.path("type").asText(null);
         LOG.debugf("event=request_received replyId=%s type=%s bytes=%d params=%s", id, type, message.length(),
-                MessageLog.json(mapper, payload.path("params")));
+                loggable(payload.path("params")));
 
         RequestHandler handler = handlers.get(type);
         Uni<Object> result;
@@ -75,7 +80,7 @@ public class RequestDispatcher {
             LOG.debugf("event=request_handled replyId=%s type=%s handler=%s status=%s durationMs=%.2f reply=%s",
                     id, type, handler == null ? null : handler.getClass().getSimpleName(),
                     status == null ? "n/a" : status.asText(), (System.nanoTime() - start) / 1_000_000.0,
-                    MessageLog.json(mapper, body));
+                    loggable(body));
             return new Reply(id, envelope(replyId, body));
         });
     }
@@ -89,5 +94,36 @@ public class RequestDispatcher {
         out.set("replyId", replyId);
         out.set("payload", payload);
         return out.toString();
+    }
+
+    // Log lines are "event=... key=value ..." (human readable, parsable by Kibana kv/grok).
+
+    /** JSON for a log line: sensitive fields masked, truncated past {@link #MAX_LOGGED_JSON_CHARS}. */
+    private String loggable(JsonNode node) {
+        String s = String.valueOf(mask(node));
+        return s.length() > MAX_LOGGED_JSON_CHARS ? s.substring(0, MAX_LOGGED_JSON_CHARS) + "...(truncated)" : s;
+    }
+
+    private JsonNode mask(JsonNode node) {
+        if (node == null) {
+            return null;
+        }
+        if (node.isObject()) {
+            ObjectNode copy = mapper.createObjectNode();
+            Iterator<Map.Entry<String, JsonNode>> it = node.fields();
+            while (it.hasNext()) {
+                Map.Entry<String, JsonNode> e = it.next();
+                copy.set(e.getKey(), SENSITIVE.matcher(e.getKey()).matches()
+                        ? mapper.getNodeFactory().textNode("***")
+                        : mask(e.getValue()));
+            }
+            return copy;
+        }
+        if (node.isArray()) {
+            ArrayNode copy = mapper.createArrayNode();
+            node.forEach(n -> copy.add(mask(n)));
+            return copy;
+        }
+        return node;
     }
 }

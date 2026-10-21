@@ -3,9 +3,8 @@ package org.bogomips.treasureInc.engine.item;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
-import org.bogomips.treasureInc.engine.messaging.Params;
+import org.bogomips.treasureInc.engine.messaging.Protocol;
 import org.bogomips.treasureInc.engine.messaging.RequestHandler;
-import org.bogomips.treasureInc.engine.messaging.Responses;
 
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -30,20 +29,20 @@ public class SellItemsHandler implements RequestHandler {
 
     @Override
     public Uni<Object> handle(JsonNode params) {
-        String publicKey = Params.publicKey(params);
-        String privateKey = Params.text(params, "private_key");
+        String publicKey = Protocol.publicKey(params);
+        String privateKey = Protocol.text(params, "private_key");
         List<Integer> ids = ids(params == null ? null : params.get("items"));
         if (publicKey == null || privateKey == null || ids == null) {
-            return Uni.createFrom().item(Responses.badRequest());
+            return Uni.createFrom().item(Protocol.badRequest());
         }
         return items.sell(publicKey, privateKey, ids).map(result -> switch (result.status()) {
-            case UNAUTHORIZED -> Responses.unauthorized();
-            case NOT_FOUND -> Responses.of(404, "Items not found");
+            case UNAUTHORIZED -> Protocol.unauthorized();
+            case NOT_FOUND -> Protocol.reply(404, "Items not found");
             case OK -> {
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("totalPrice", result.totalPrice());
                 payload.put("money", result.money());
-                yield Responses.of(200, "OK", payload);
+                yield Protocol.reply(200, "OK", payload);
             }
         });
     }

@@ -1,6 +1,4 @@
-package org.bogomips.treasureInc.engine.health;
-
-import org.bogomips.treasureInc.engine.messaging.RequestHandler;
+package org.bogomips.treasureInc.engine.messaging;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.smallrye.mutiny.Uni;
@@ -14,8 +12,18 @@ import org.eclipse.microprofile.health.Liveness;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+/** Answers "healthcheck" requests with the result of the liveness check (also served on /q/health/live). */
 @ApplicationScoped
-public class HealthCheckHandler implements RequestHandler {
+public class HealthEndpoint implements RequestHandler {
+
+    @Liveness
+    public static class Alive implements HealthCheck {
+
+        @Override
+        public HealthCheckResponse call() {
+            return HealthCheckResponse.up("alive");
+        }
+    }
 
     @Inject
     @Liveness
@@ -32,7 +40,7 @@ public class HealthCheckHandler implements RequestHandler {
                 .runSubscriptionOn(Infrastructure.getDefaultWorkerPool());
     }
 
-    static Map<String, Object> toMap(HealthCheckResponse response) {
+    private static Map<String, Object> toMap(HealthCheckResponse response) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("name", response.getName());
         result.put("status", response.getStatus().name());

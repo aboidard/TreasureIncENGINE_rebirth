@@ -3,7 +3,7 @@ package org.bogomips.treasureInc.engine.item;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
-import org.bogomips.treasureInc.engine.messaging.Params;
+import org.bogomips.treasureInc.engine.messaging.Protocol;
 import org.bogomips.treasureInc.engine.user.UserService;
 
 /** Same listing, but the private key must match. */
@@ -27,7 +27,7 @@ public class GetPrivateItemsHandler extends AbstractGetItemsHandler {
 
     @Override
     Uni<Boolean> authorize(String publicKey, JsonNode params) {
-        String privateKey = Params.text(params, "private_key");
+        String privateKey = Protocol.text(params, "private_key");
         if (privateKey == null) {
             return Uni.createFrom().item(false);
         }
