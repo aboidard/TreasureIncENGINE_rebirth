@@ -12,6 +12,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.HexFormat;
+import java.util.function.BiFunction;
 import java.util.function.Supplier;
 
 /** Use cases around users: create, log in, authenticate and keep the Redis "logged users" cache coherent. */
@@ -39,33 +40,16 @@ public class UserService {
         this.defaultMoney = defaultMoney;
     }
 
-    /** Serializes read-modify-write sequences on one user's Redis data. Not reentrant. */
-    public <T> Uni<T> withLock(String publicKey, Supplier<Uni<T>> action) {
-        return lock.withLock(publicKey, action);
-    }
-
     /** Persists a new user and logs it in the cache. Fails with {@link KeyGenerationException} if no free key is found. */
     public Uni<CreatedUser> create() {
         return createWithFreeKey(MAX_KEY_ATTEMPTS).flatMap(created ->
-                cache.put(created.user().publicKey(), freshSession(created.user(), CachedSession.hashKey(created.privateKey())))
+                cache.put(created.user().publicKey(), freshSession(created.user(), created.privateKey()))
                         .replaceWith(created));
     }
 
     /** Logs the user in (cache first, database otherwise); emits null when the credentials are wrong. */
     public Uni<UserInfo> login(String publicKey, String privateKey) {
-        return lock.withLock(publicKey, () -> loginLocked(publicKey, privateKey));
-    }
-
-    private Uni<UserInfo> loginLocked(String publicKey, String privateKey) {
-        String keyHash = CachedSession.hashKey(privateKey);
-        return cache.get(publicKey).flatMap(cached -> {
-            if (cached != null) {
-                return refreshIfMatching(publicKey, cached, keyHash);
-            }
-            return repository.login(publicKey, privateKey).flatMap(user -> user == null
-                    ? Uni.createFrom().nullItem()
-                    : cache.put(publicKey, freshSession(user, keyHash)).replaceWith(user));
-        });
+        return lock.withLock(publicKey, () -> openSession(publicKey, privateKey, repository::login));
     }
 
     /**
@@ -77,22 +61,13 @@ public class UserService {
             if (cached == null) {
                 return repository.authenticate(publicKey, privateKey);
             }
-            boolean matches = MessageDigest.isEqual(CachedSession.hashKey(privateKey).getBytes(StandardCharsets.UTF_8),
-                    cached.keyHash().getBytes(StandardCharsets.UTF_8));
-            return Uni.createFrom().item(matches ? cached.user() : null);
+            return Uni.createFrom().item(cached.keyMatches(privateKey) ? cached.user() : null);
         });
     }
 
-    /** Like {@link #authenticate} but guarantees a cached session afterwards. Call it inside {@link #withLock}. */
+    /** Like {@link #authenticate} but guarantees a cached session afterwards. Call it inside the user's {@link Lock}. */
     public Uni<UserInfo> openSession(String publicKey, String privateKey) {
-        return cache.get(publicKey).flatMap(cached -> {
-            if (cached != null) {
-                return refreshIfMatching(publicKey, cached, CachedSession.hashKey(privateKey));
-            }
-            return repository.authenticate(publicKey, privateKey).flatMap(user -> user == null
-                    ? Uni.createFrom().nullItem()
-                    : cache.put(publicKey, freshSession(user, CachedSession.hashKey(privateKey))).replaceWith(user));
-        });
+        return openSession(publicKey, privateKey, repository::authenticate);
     }
 
     /** Flags the session as holding changes (e.g. Redis-only items) that the next synchronization must write. */
@@ -118,13 +93,22 @@ public class UserService {
         });
     }
 
-    private Uni<UserInfo> refreshIfMatching(String publicKey, CachedSession cached, String keyHash) {
-        boolean matches = MessageDigest.isEqual(keyHash.getBytes(StandardCharsets.UTF_8),
-                cached.keyHash().getBytes(StandardCharsets.UTF_8));
-        if (!matches) {
-            return Uni.createFrom().nullItem();
-        }
-        return cache.put(publicKey, cached.touched()).replaceWith(cached.user());
+    /**
+     * Refreshes the cached session if the key matches; on a cache miss, asks {@code fromDatabase} (login or plain
+     * authentication) and caches the user it returns. Emits null when the credentials are wrong.
+     */
+    private Uni<UserInfo> openSession(String publicKey, String privateKey,
+                                      BiFunction<String, String, Uni<UserInfo>> fromDatabase) {
+        return cache.get(publicKey).flatMap(cached -> {
+            if (cached != null) {
+                return cached.keyMatches(privateKey)
+                        ? cache.put(publicKey, cached.touched()).replaceWith(cached.user())
+                        : Uni.createFrom().nullItem();
+            }
+            return fromDatabase.apply(publicKey, privateKey).flatMap(user -> user == null
+                    ? Uni.createFrom().nullItem()
+                    : cache.put(publicKey, freshSession(user, privateKey)).replaceWith(user));
+        });
     }
 
     private Uni<CreatedUser> createWithFreeKey(int attemptsLeft) {
@@ -138,8 +122,8 @@ public class UserService {
                 : repository.create(publicKey, privateKey, defaultMoney).map(u -> new CreatedUser(u, privateKey)));
     }
 
-    private static CachedSession freshSession(UserInfo user, String keyHash) {
-        return new CachedSession(user, Instant.now().toString(), keyHash);
+    private static CachedSession freshSession(UserInfo user, String privateKey) {
+        return new CachedSession(user, Instant.now().toString(), CachedSession.hashKey(privateKey));
     }
 
     private static String randomKey(String characters, int length) {
@@ -180,6 +164,12 @@ public class UserService {
             } catch (NoSuchAlgorithmException e) {
                 throw new IllegalStateException(e);
             }
+        }
+
+        /** Constant-time comparison of the private key's hash with the stored one. */
+        public boolean keyMatches(String privateKey) {
+            return MessageDigest.isEqual(hashKey(privateKey).getBytes(StandardCharsets.UTF_8),
+                    keyHash.getBytes(StandardCharsets.UTF_8));
         }
 
         public CachedSession touched() {

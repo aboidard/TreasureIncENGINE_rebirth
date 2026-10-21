@@ -26,27 +26,12 @@ public class RedisUserCache implements UserService.Cache {
 
     @Override
     public Uni<CachedSession> get(String publicKey) {
-        return hash.hget(KEY, publicKey).map(json -> {
-            if (json == null) {
-                return null;
-            }
-            try {
-                return mapper.readValue(json, CachedSession.class);
-            } catch (JsonProcessingException e) {
-                throw new IllegalStateException("Corrupted cache entry for " + publicKey, e);
-            }
-        });
+        return hash.hget(KEY, publicKey).map(json -> json == null ? null : read(publicKey, json));
     }
 
     @Override
     public Multi<CachedSession> scan() {
-        return hash.hscan(KEY, new ScanArgs().count(SCAN_BATCH)).toMulti().map(e -> {
-            try {
-                return mapper.readValue(e.getValue(), CachedSession.class);
-            } catch (JsonProcessingException ex) {
-                throw new IllegalStateException("Corrupted cache entry for " + e.getKey(), ex);
-            }
-        });
+        return hash.hscan(KEY, new ScanArgs().count(SCAN_BATCH)).toMulti().map(e -> read(e.getKey(), e.getValue()));
     }
 
     @Override
@@ -56,8 +41,20 @@ public class RedisUserCache implements UserService.Cache {
 
     @Override
     public Uni<Void> put(String publicKey, CachedSession session) {
+        return write(session).flatMap(json -> hash.hset(KEY, publicKey, json)).replaceWithVoid();
+    }
+
+    private CachedSession read(String publicKey, String json) {
         try {
-            return hash.hset(KEY, publicKey, mapper.writeValueAsString(session)).replaceWithVoid();
+            return mapper.readValue(json, CachedSession.class);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Corrupted cache entry for " + publicKey, e);
+        }
+    }
+
+    private Uni<String> write(CachedSession session) {
+        try {
+            return Uni.createFrom().item(mapper.writeValueAsString(session));
         } catch (JsonProcessingException e) {
             return Uni.createFrom().failure(e);
         }

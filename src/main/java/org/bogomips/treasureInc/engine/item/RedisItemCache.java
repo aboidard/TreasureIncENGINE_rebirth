@@ -3,6 +3,7 @@ package org.bogomips.treasureInc.engine.item;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.quarkus.redis.datasource.ReactiveRedisDataSource;
+import io.quarkus.redis.datasource.keys.ReactiveKeyCommands;
 import io.quarkus.redis.datasource.value.ReactiveValueCommands;
 import io.quarkus.redis.datasource.value.SetArgs;
 import io.smallrye.mutiny.Uni;
@@ -24,7 +25,7 @@ public class RedisItemCache implements ItemService.Cache {
     static final String ID_SEQUENCE_KEY = "treasure_inc.items_seq.redis_only";
 
     private final ReactiveValueCommands<String, String> values;
-    private final io.quarkus.redis.datasource.keys.ReactiveKeyCommands<String> keys;
+    private final ReactiveKeyCommands<String> keys;
     private final ObjectMapper mapper;
     private final long ttlSeconds;
     private final long unknownUserTtlSeconds;
@@ -41,40 +42,23 @@ public class RedisItemCache implements ItemService.Cache {
 
     @Override
     public Uni<ItemList> get(String publicKey) {
-        return values.get(KEY_PREFIX + publicKey).map(json -> {
-            if (json == null) {
-                return null;
-            }
-            try {
-                return mapper.readValue(json, ItemList.class);
-            } catch (JsonProcessingException e) {
-                throw new IllegalStateException("Corrupted items cache entry for " + publicKey, e);
-            }
-        });
+        return values.get(key(publicKey)).map(json -> json == null ? null : read(publicKey, json));
     }
 
     @Override
     public Uni<Void> put(String publicKey, ItemList list) {
-        try {
-            return values.setex(KEY_PREFIX + publicKey, list.userFound() ? ttlSeconds : unknownUserTtlSeconds,
-                    mapper.writeValueAsString(list));
-        } catch (JsonProcessingException e) {
-            return Uni.createFrom().failure(e);
-        }
+        long ttl = list.userFound() ? ttlSeconds : unknownUserTtlSeconds;
+        return write(list).flatMap(json -> values.setex(key(publicKey), ttl, json));
     }
 
     @Override
     public Uni<Void> persist(String publicKey, ItemList list) {
-        try {
-            return values.set(KEY_PREFIX + publicKey, mapper.writeValueAsString(list));
-        } catch (JsonProcessingException e) {
-            return Uni.createFrom().failure(e);
-        }
+        return write(list).flatMap(json -> values.set(key(publicKey), json));
     }
 
     @Override
     public Uni<Void> evict(String publicKey) {
-        return keys.del(KEY_PREFIX + publicKey).replaceWithVoid();
+        return keys.del(key(publicKey)).replaceWithVoid();
     }
 
     @Override
@@ -90,12 +74,28 @@ public class RedisItemCache implements ItemService.Cache {
                 return Uni.createFrom().voidItem();
             }
             ItemList remaining = new ItemList(true, list.items().stream().filter(i -> !toRemove.contains(i.id())).toList());
-            try {
-                // KEEPTTL: do not make a persistent (Redis-only) list expire
-                return values.set(KEY_PREFIX + publicKey, mapper.writeValueAsString(remaining), new SetArgs().keepttl());
-            } catch (JsonProcessingException e) {
-                return Uni.createFrom().failure(e);
-            }
+            // KEEPTTL: do not make a persistent (Redis-only) list expire
+            return write(remaining).flatMap(json -> values.set(key(publicKey), json, new SetArgs().keepttl()));
         });
+    }
+
+    private static String key(String publicKey) {
+        return KEY_PREFIX + publicKey;
+    }
+
+    private ItemList read(String publicKey, String json) {
+        try {
+            return mapper.readValue(json, ItemList.class);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Corrupted items cache entry for " + publicKey, e);
+        }
+    }
+
+    private Uni<String> write(ItemList list) {
+        try {
+            return Uni.createFrom().item(mapper.writeValueAsString(list));
+        } catch (JsonProcessingException e) {
+            return Uni.createFrom().failure(e);
+        }
     }
 }
