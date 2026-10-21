@@ -16,7 +16,7 @@ import java.util.function.BiFunction;
 
 /** Item request types: validates params, calls {@link ItemService} and shapes the reply. */
 @ApplicationScoped
-public class ItemEndpoints {
+class ItemEndpoints {
 
     static final int DEFAULT_LIMIT = 20;
     static final int MAX_LIMIT = 100;
@@ -26,7 +26,7 @@ public class ItemEndpoints {
     private final ItemService items;
     private final UserService users;
 
-    public ItemEndpoints(ItemService items, UserService users) {
+    ItemEndpoints(ItemService items, UserService users) {
         this.items = items;
         this.users = users;
     }

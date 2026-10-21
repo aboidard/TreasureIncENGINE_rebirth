@@ -22,7 +22,7 @@ import java.util.regex.Pattern;
  * registered for its type and builds the reply envelope. New request types only need a new handler bean.
  */
 @ApplicationScoped
-public class RequestDispatcher {
+class RequestDispatcher {
 
     private static final Logger LOG = Logger.getLogger(RequestDispatcher.class);
     private static final Pattern SENSITIVE = Pattern.compile("(?i).*(private_key|password|secret|token).*");
@@ -35,7 +35,7 @@ public class RequestDispatcher {
     private final ObjectMapper mapper;
     private final Map<String, RequestHandler> handlers = new HashMap<>();
 
-    public RequestDispatcher(ObjectMapper mapper, @Any Instance<RequestHandler> handlerBeans) {
+    RequestDispatcher(ObjectMapper mapper, @Any Instance<RequestHandler> handlerBeans) {
         this.mapper = mapper;
         handlerBeans.forEach(h -> handlers.put(h.type(), h));
     }

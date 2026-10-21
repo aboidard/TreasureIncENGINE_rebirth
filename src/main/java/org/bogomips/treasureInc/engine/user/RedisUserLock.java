@@ -19,7 +19,7 @@ import java.util.function.Supplier;
  * critical section.
  */
 @ApplicationScoped
-public class RedisUserLock implements UserService.Lock {
+class RedisUserLock implements UserService.Lock {
 
     private static final Logger LOG = Logger.getLogger(RedisUserLock.class);
 
@@ -33,7 +33,7 @@ public class RedisUserLock implements UserService.Lock {
     private final Duration ttl;
     private final Duration maxWait;
 
-    public RedisUserLock(ReactiveRedisDataSource redis, Vertx vertx,
+    RedisUserLock(ReactiveRedisDataSource redis, Vertx vertx,
                          @ConfigProperty(name = "engine.locks.ttl", defaultValue = "10s") Duration ttl,
                          @ConfigProperty(name = "engine.locks.max-wait", defaultValue = "5s") Duration maxWait) {
         this.redis = redis;
