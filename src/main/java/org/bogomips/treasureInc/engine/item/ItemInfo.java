@@ -1,6 +1,7 @@
 package org.bogomips.treasureInc.engine.item;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.bogomips.treasureInc.engine.item.ItemCatalog.Rarity;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -24,7 +25,7 @@ public record ItemInfo(
 
     /** Plain text if present, otherwise the catalogue text for the stored description id. */
     public String resolvedDescription() {
-        return description != null ? description : ItemTexts.description(Rarity.fromValue(rarity), descriptionId);
+        return description != null ? description : ItemCatalog.description(Rarity.fromValue(rarity), descriptionId);
     }
 
     public Map<String, Object> toMap() {
