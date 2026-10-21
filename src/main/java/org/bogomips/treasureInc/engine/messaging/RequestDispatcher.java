@@ -1,0 +1,93 @@
+package org.bogomips.treasureInc.engine.messaging;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.smallrye.mutiny.Uni;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Any;
+import jakarta.enterprise.inject.Instance;
+import org.jboss.logging.Logger;
+
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * Transport-agnostic core: parses a request envelope, routes it to the {@link RequestHandler}
+ * registered for its type and builds the reply envelope. New request types only need a new handler bean.
+ */
+@ApplicationScoped
+public class RequestDispatcher {
+
+    private static final Logger LOG = Logger.getLogger(RequestDispatcher.class);
+
+    /** The envelope to publish back; replyId is kept apart for logging. */
+    public record Reply(String replyId, String json) {
+    }
+
+    private final ObjectMapper mapper;
+    private final Map<String, RequestHandler> handlers = new HashMap<>();
+
+    public RequestDispatcher(ObjectMapper mapper, @Any Instance<RequestHandler> handlerBeans) {
+        this.mapper = mapper;
+        handlerBeans.forEach(h -> handlers.put(h.type(), h));
+    }
+
+    /** Emits null (nothing to reply) when the message is malformed or has no replyId. */
+    public Uni<Reply> dispatch(String message) {
+        long start = System.nanoTime();
+        JsonNode root;
+        try {
+            root = mapper.readTree(message);
+        } catch (JsonProcessingException e) {
+            LOG.warnf("event=message_rejected reason=malformed_json bytes=%d error=\"%s\"", message.length(),
+                    e.getOriginalMessage());
+            return Uni.createFrom().nullItem();
+        }
+        JsonNode replyId = root.get("replyId");
+        if (replyId == null || replyId.isNull()) {
+            LOG.warnf("event=message_rejected reason=missing_replyId bytes=%d keys=%s", message.length(),
+                    root.properties().stream().map(Map.Entry::getKey).toList());
+            return Uni.createFrom().nullItem();
+        }
+        String id = replyId.asText();
+        JsonNode payload = root.path("payload");
+        String type = payload.path("type").asText(null);
+        LOG.debugf("event=request_received replyId=%s type=%s bytes=%d params=%s", id, type, message.length(),
+                MessageLog.json(mapper, payload.path("params")));
+
+        RequestHandler handler = handlers.get(type);
+        Uni<Object> result;
+        if (handler == null) {
+            LOG.warnf("event=request_unhandled replyId=%s type=%s knownTypes=%s", id, type, handlers.keySet());
+            result = Uni.createFrom().item(error("unknown request type: " + type));
+        } else {
+            result = handler.handle(payload.path("params"))
+                    .onFailure().recoverWithItem(t -> {
+                        LOG.errorf(t, "event=handler_failed replyId=%s type=%s reason=%s", id, type, t.toString());
+                        return error(t.getMessage());
+                    });
+        }
+        return result.map(r -> {
+            JsonNode body = mapper.valueToTree(r);
+            JsonNode status = body.get("status");
+            LOG.debugf("event=request_handled replyId=%s type=%s handler=%s status=%s durationMs=%.2f reply=%s",
+                    id, type, handler == null ? null : handler.getClass().getSimpleName(),
+                    status == null ? "n/a" : status.asText(), (System.nanoTime() - start) / 1_000_000.0,
+                    MessageLog.json(mapper, body));
+            return new Reply(id, envelope(replyId, body));
+        });
+    }
+
+    private static Map<String, Object> error(String message) {
+        return Map.of("error", String.valueOf(message));
+    }
+
+    private String envelope(JsonNode replyId, JsonNode payload) {
+        ObjectNode out = mapper.createObjectNode();
+        out.set("replyId", replyId);
+        out.set("payload", payload);
+        return out.toString();
+    }
+}
