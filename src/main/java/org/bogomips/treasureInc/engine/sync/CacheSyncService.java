@@ -1,5 +1,6 @@
 package org.bogomips.treasureInc.engine.sync;
 
+import io.quarkus.scheduler.Scheduled;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.bogomips.treasureInc.engine.item.ItemInfo;
@@ -48,6 +49,21 @@ public class CacheSyncService {
         this.lock = lock;
         this.maxAge = maxAge;
         this.sessionTtl = sessionTtl;
+    }
+
+    /** Runs {@link #syncDue} every {@code engine.sync.check-interval} (default 30s). */
+    @Scheduled(every = "{engine.sync.check-interval}", concurrentExecution = Scheduled.ConcurrentExecution.SKIP,
+            identity = "redis-to-database-sync")
+    Uni<Void> run() {
+        return syncDue(Instant.now())
+                .invoke(n -> {
+                    if (n > 0) {
+                        LOG.infof("event=sync_completed users=%d", n);
+                    }
+                })
+                .onFailure().invoke(t -> LOG.errorf(t, "event=sync_run_failed reason=%s", t.toString()))
+                .onFailure().recoverWithNull()
+                .replaceWithVoid();
     }
 
     /**
