@@ -1,0 +1,74 @@
+engine:
+  channels:
+    #requests: engine.requests
+    #replies: engine.replies
+    requests: message-log
+    replies: message-log-res
+  items:
+    cache-ttl-seconds: 300
+    unknown-user-ttl-seconds: 60
+  sync:
+    # how often the scheduler looks at the logged users
+    check-interval: 30s
+    # a user with pending changes is written to the database once its last sync is older than this
+    max-age: 3m
+    # a synchronized session idle for longer than this is removed from Redis (the next login reloads it)
+    session-ttl: 1h
+  locks:
+    # safety expiry of a per-user lock (must exceed the longest critical section)
+    ttl: 10s
+    # how long a request waits for a user's lock before failing
+    max-wait: 5s
+quarkus:
+  application:
+    name: maestro
+    version: 0.0.6
+  http:
+    port: 8091
+    test-port: 8092
+    test-timeout: 10s
+  hibernate-orm:
+    schema-management:
+      strategy: none
+"%dev":
+  quarkus:
+    log:
+      category:
+        "org.bogomips":
+          level: DEBUG
+      console:
+        json:
+          enabled: false
+    http:
+      port: 8088
+    datasource:
+      devservices:
+        enabled: false
+      db-kind: postgresql
+      username: treasure_inc
+      password: ${DB_PASSWORD}
+      reactive:
+        url: vertx-reactive:postgresql://localhost:5432/treasure_inc
+        max-size: 16
+    redis:
+      devservices:
+        enabled: false
+      hosts: redis://localhost:6379
+      password: ${REDIS_PASSWORD}
+"%test":
+  quarkus:
+    scheduler:
+      enabled: false
+    http:
+      port: 8089
+    datasource:
+      devservices:
+        enabled: false
+      db-kind: postgresql
+      reactive:
+        url: postgresql://localhost:5432/test
+    redis:
+      devservices:
+        enabled: false
+      hosts: redis://localhost:6379
+      password: ${REDIS_PASSWORD}
