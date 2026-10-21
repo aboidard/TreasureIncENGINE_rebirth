@@ -65,7 +65,7 @@ class LoginHandlerTest {
 
     private JsonNode login(String pub, String priv) throws Exception {
         JsonNode params = mapper.readTree("{\"user\":\"" + pub + "\",\"private_key\":\"" + priv + "\"}");
-        Object r = new LoginHandler(new UserService(repo, cache, new org.bogomips.treasureInc.engine.testsupport.NoopUserLock(), 10000)).handle(params).await().indefinitely();
+        Object r = new UserEndpoints(new UserService(repo, cache, new org.bogomips.treasureInc.engine.testsupport.NoopUserLock(), 10000)).login().handle(params).await().indefinitely();
         return mapper.valueToTree(r);
     }
 

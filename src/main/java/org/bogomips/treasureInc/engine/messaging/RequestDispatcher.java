@@ -14,6 +14,7 @@ import org.jboss.logging.Logger;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -65,7 +66,7 @@ public class RequestDispatcher {
         RequestHandler handler = handlers.get(type);
         Uni<Object> result;
         if (handler == null) {
-            LOG.warnf("event=request_unhandled replyId=%s type=%s knownTypes=%s", id, type, handlers.keySet());
+            LOG.warnf("event=request_unhandled replyId=%s type=%s knownTypes=%s", id, type, knownTypes());
             result = Uni.createFrom().item(error("unknown request type: " + type));
         } else {
             result = handler.handle(payload.path("params"))
@@ -77,12 +78,15 @@ public class RequestDispatcher {
         return result.map(r -> {
             JsonNode body = mapper.valueToTree(r);
             JsonNode status = body.get("status");
-            LOG.debugf("event=request_handled replyId=%s type=%s handler=%s status=%s durationMs=%.2f reply=%s",
-                    id, type, handler == null ? null : handler.getClass().getSimpleName(),
-                    status == null ? "n/a" : status.asText(), (System.nanoTime() - start) / 1_000_000.0,
+            LOG.debugf("event=request_handled replyId=%s type=%s status=%s durationMs=%.2f reply=%s",
+                    id, type, status == null ? "n/a" : status.asText(), (System.nanoTime() - start) / 1_000_000.0,
                     loggable(body));
             return new Reply(id, envelope(replyId, body));
         });
+    }
+
+    Set<String> knownTypes() {
+        return Set.copyOf(handlers.keySet());
     }
 
     private static Map<String, Object> error(String message) {
