@@ -19,7 +19,7 @@ public class ItemService {
     private final Repository repository;
     private final Cache itemCache;
     private final UserService users;
-    private final ItemGenerator generator = new ItemGenerator(RandomGenerator.getDefault());
+    private final ItemCatalog catalog = new ItemCatalog(RandomGenerator.getDefault());
 
     public ItemService(Repository repository, Cache itemCache, UserService users) {
         this.repository = repository;
@@ -66,7 +66,7 @@ public class ItemService {
                 return Uni.createFrom().nullItem();
             }
             return itemCache.reserveIds(count).flatMap(firstId -> {
-                List<ItemInfo> generated = IntStream.range(0, count).mapToObj(i -> generator.generate(firstId + i)).toList();
+                List<ItemInfo> generated = IntStream.range(0, count).mapToObj(i -> catalog.generate(firstId + i)).toList();
                 return list(publicKey).flatMap(current -> {
                     List<ItemInfo> all = new ArrayList<>(current.userFound() ? current.items() : List.of());
                     all.addAll(generated);

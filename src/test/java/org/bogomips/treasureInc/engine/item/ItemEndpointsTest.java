@@ -3,6 +3,7 @@ package org.bogomips.treasureInc.engine.item;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.smallrye.mutiny.Uni;
+import org.bogomips.treasureInc.engine.item.ItemCatalog.Rarity;
 import org.bogomips.treasureInc.engine.item.ItemService.ItemList;
 import org.bogomips.treasureInc.engine.item.ItemService.SellResult;
 import org.bogomips.treasureInc.engine.messaging.RequestHandler;

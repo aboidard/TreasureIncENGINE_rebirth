@@ -1,13 +1,58 @@
 package org.bogomips.treasureInc.engine.item;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.random.RandomGenerator;
 
 /**
- * Text catalogues for generated items and expeditions.
- * Descriptions are stored in Redis as their index in the rarity's list: only ever append to those lists.
+ * Creates random items from the text catalogues (items and expeditions) and the rarity table.
+ * A generated item keeps its description as an id: its index in the rarity's list, as stored in Redis,
+ * so only ever append to those lists.
  */
-public final class ItemTexts {
+public class ItemCatalog {
+
+    public enum Rarity {
+        COMMON("common", 1),
+        UNCOMMON("uncommon", 2),
+        RARE("rare", 5),
+        EPIC("epic", 20),
+        LEGENDARY("legendary", 100);
+
+        private final String value;
+        private final int coef;
+
+        Rarity(String value, int coef) {
+            this.value = value;
+            this.coef = coef;
+        }
+
+        public String value() {
+            return value;
+        }
+
+        public int coef() {
+            return coef;
+        }
+
+        /** @param roll a number in 1..1000 */
+        public static Rarity fromRoll(int roll) {
+            if (roll <= 650) return COMMON;
+            if (roll <= 850) return UNCOMMON;
+            if (roll <= 990) return RARE;
+            if (roll <= 999) return EPIC;
+            return LEGENDARY;
+        }
+
+        /** Unknown or null values fall back to COMMON, like the original generator. */
+        public static Rarity fromValue(String value) {
+            for (Rarity r : values()) {
+                if (r.value.equalsIgnoreCase(value)) {
+                    return r;
+                }
+            }
+            return COMMON;
+        }
+    }
 
     private static final String FEMININE = "F";
 
@@ -133,7 +178,24 @@ public final class ItemTexts {
             "C'est juste pour le style.",
             "Ça pourrait être utile un jour, peut-être.");
 
-    private ItemTexts() {
+    private final RandomGenerator random;
+
+    public ItemCatalog(RandomGenerator random) {
+        this.random = random;
+    }
+
+    public ItemInfo generate(int id) {
+        Rarity rarity = Rarity.fromRoll(random.nextInt(1000) + 1);
+        int price = (random.nextInt(1000) + 1000) * rarity.coef();
+        String now = Instant.now().toString();
+        return new ItemInfo(id, itemName(rarity, random), null, null, price, rarity.value(), now, now,
+                randomDescriptionId(rarity, random));
+    }
+
+    /** Text for a stored description id; null if the id is unknown. */
+    public static String description(Rarity rarity, Integer id) {
+        List<String> list = descriptions(rarity);
+        return id == null || id < 0 || id >= list.size() ? null : list.get(id);
     }
 
     public static String expeditionName(RandomGenerator random) {
@@ -142,7 +204,7 @@ public final class ItemTexts {
         return ex[0] + " " + agree(adj, FEMININE.equals(ex[1]));
     }
 
-    public static String itemName(Rarity rarity, RandomGenerator random) {
+    private static String itemName(Rarity rarity, RandomGenerator random) {
         List<String> adjectives;
         List<String> nouns;
         switch (rarity) {
@@ -157,15 +219,9 @@ public final class ItemTexts {
         return item[0] + " " + agree(adj, FEMININE.equals(item[1]));
     }
 
-    /** Random description id, valid for {@link #description(Rarity, int)} with the same rarity. */
-    public static int randomDescriptionId(Rarity rarity, RandomGenerator random) {
+    /** Random description id, valid for {@link #description(Rarity, Integer)} with the same rarity. */
+    private static int randomDescriptionId(Rarity rarity, RandomGenerator random) {
         return random.nextInt(descriptions(rarity).size());
-    }
-
-    /** Text for a stored description id; null if the id is unknown. */
-    public static String description(Rarity rarity, Integer id) {
-        List<String> list = descriptions(rarity);
-        return id == null || id < 0 || id >= list.size() ? null : list.get(id);
     }
 
     private static List<String> descriptions(Rarity rarity) {
