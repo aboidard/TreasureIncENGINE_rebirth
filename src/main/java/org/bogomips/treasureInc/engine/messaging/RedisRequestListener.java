@@ -21,7 +21,7 @@ import java.util.List;
 
 /** Redis pub/sub adapter: feeds incoming messages to the {@link RequestDispatcher} and publishes the replies. */
 @ApplicationScoped
-public class RedisRequestListener {
+class RedisRequestListener {
 
     private static final Logger LOG = Logger.getLogger(RedisRequestListener.class);
     private static final long RESUBSCRIBE_DELAY_MS = 2000;
@@ -36,7 +36,7 @@ public class RedisRequestListener {
     private volatile boolean stopped;
     private volatile RedisConnection subscriberConnection;
 
-    public RedisRequestListener(Vertx vertx,
+    RedisRequestListener(Vertx vertx,
                                 Redis redis,
                                 ReactiveRedisDataSource dataSource,
                                 RequestDispatcher dispatcher,

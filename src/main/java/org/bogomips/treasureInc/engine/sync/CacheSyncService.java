@@ -1,15 +1,13 @@
 package org.bogomips.treasureInc.engine.sync;
 
+import io.quarkus.scheduler.Scheduled;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
-import org.bogomips.treasureInc.engine.item.application.ItemCache;
-import org.bogomips.treasureInc.engine.item.domain.ItemInfo;
-import org.bogomips.treasureInc.engine.item.domain.ItemList;
-import org.bogomips.treasureInc.engine.item.domain.ItemRepository;
-import org.bogomips.treasureInc.engine.user.application.CachedSession;
-import org.bogomips.treasureInc.engine.user.application.UserCache;
-import org.bogomips.treasureInc.engine.user.application.UserLock;
-import org.bogomips.treasureInc.engine.user.domain.UserRepository;
+import org.bogomips.treasureInc.engine.item.ItemInfo;
+import org.bogomips.treasureInc.engine.item.ItemService.ItemList;
+import org.bogomips.treasureInc.engine.item.ItemService;
+import org.bogomips.treasureInc.engine.user.UserService.CachedSession;
+import org.bogomips.treasureInc.engine.user.UserService;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
@@ -32,16 +30,16 @@ public class CacheSyncService {
 
     private static final Logger LOG = Logger.getLogger(CacheSyncService.class);
 
-    private final UserCache userCache;
-    private final ItemCache itemCache;
-    private final UserRepository userRepository;
-    private final ItemRepository itemRepository;
-    private final UserLock lock;
+    private final UserService.Cache userCache;
+    private final ItemService.Cache itemCache;
+    private final UserService.Repository userRepository;
+    private final ItemService.Repository itemRepository;
+    private final UserService.Lock lock;
     private final Duration maxAge;
     private final Duration sessionTtl;
 
-    public CacheSyncService(UserCache userCache, ItemCache itemCache, UserRepository userRepository,
-                            ItemRepository itemRepository, UserLock lock,
+    public CacheSyncService(UserService.Cache userCache, ItemService.Cache itemCache, UserService.Repository userRepository,
+                            ItemService.Repository itemRepository, UserService.Lock lock,
                             @ConfigProperty(name = "engine.sync.max-age", defaultValue = "3m") Duration maxAge,
                             @ConfigProperty(name = "engine.sync.session-ttl", defaultValue = "1h") Duration sessionTtl) {
         this.userCache = userCache;
@@ -51,6 +49,21 @@ public class CacheSyncService {
         this.lock = lock;
         this.maxAge = maxAge;
         this.sessionTtl = sessionTtl;
+    }
+
+    /** Runs {@link #syncDue} every {@code engine.sync.check-interval} (default 30s). */
+    @Scheduled(every = "{engine.sync.check-interval}", concurrentExecution = Scheduled.ConcurrentExecution.SKIP,
+            identity = "redis-to-database-sync")
+    Uni<Void> run() {
+        return syncDue(Instant.now())
+                .invoke(n -> {
+                    if (n > 0) {
+                        LOG.infof("event=sync_completed users=%d", n);
+                    }
+                })
+                .onFailure().invoke(t -> LOG.errorf(t, "event=sync_run_failed reason=%s", t.toString()))
+                .onFailure().recoverWithNull()
+                .replaceWithVoid();
     }
 
     /**
