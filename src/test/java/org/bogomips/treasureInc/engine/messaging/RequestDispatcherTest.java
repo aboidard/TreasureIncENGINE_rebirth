@@ -6,6 +6,8 @@ import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
+import java.util.Set;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @QuarkusTest
@@ -24,6 +26,12 @@ class RequestDispatcherTest {
         assertEquals("abc", out.get("replyId").asText());
         assertEquals("UP", out.at("/payload/status").asText());
         assertEquals("alive", out.at("/payload/name").asText());
+    }
+
+    @Test
+    void everyRequestTypeIsRegistered() {
+        assertEquals(Set.of("healthcheck", "getItems", "getPrivateItems", "generateItemsForUser", "sellItems",
+                "createUser", "login"), dispatcher.knownTypes());
     }
 
     @Test

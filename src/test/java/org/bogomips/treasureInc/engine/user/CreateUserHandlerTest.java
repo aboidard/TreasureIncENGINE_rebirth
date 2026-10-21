@@ -63,7 +63,7 @@ class CreateUserHandlerTest {
 
     @Test
     void createsAndCachesUser() {
-        Object r = new CreateUserHandler(new UserService(repo, cache, new org.bogomips.treasureInc.engine.testsupport.NoopUserLock(), 10000)).handle(null).await().indefinitely();
+        Object r = new UserEndpoints(new UserService(repo, cache, new org.bogomips.treasureInc.engine.testsupport.NoopUserLock(), 10000)).createUser().handle(null).await().indefinitely();
         JsonNode n = mapper.valueToTree(r);
         assertEquals(201, n.get("status").asInt());
         String pub = n.at("/payload/user/public_key").asText();

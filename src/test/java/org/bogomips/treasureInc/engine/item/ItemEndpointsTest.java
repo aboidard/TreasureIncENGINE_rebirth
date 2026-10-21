@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class ItemHandlersTest {
+class ItemEndpointsTest {
 
     private static final String PUB = "12345678900";
     private static final String PRIV = "secret";
@@ -149,6 +149,7 @@ class ItemHandlersTest {
     private final org.bogomips.treasureInc.engine.testsupport.NoopUserLock lock = new org.bogomips.treasureInc.engine.testsupport.NoopUserLock();
     private final UserService userService = new UserService(userRepo, userCache, lock, 10000);
     private final ItemService service = new ItemService(itemRepo, cache, userService);
+    private final ItemEndpoints endpoints = new ItemEndpoints(service, userService);
 
     private JsonNode call(RequestHandler h, String json) throws Exception {
         return mapper.valueToTree(h.handle(mapper.readTree(json)).await().indefinitely());
@@ -156,7 +157,7 @@ class ItemHandlersTest {
 
     @Test
     void publicGetPagesAndUsesCache() throws Exception {
-        GetItemsHandler h = new GetItemsHandler(service);
+        RequestHandler h = endpoints.getItems();
         JsonNode p1 = call(h, "{\"user\":\"" + PUB + "\",\"page\":1,\"limit\":2}");
         assertEquals(200, p1.get("status").asInt());
         assertEquals(2, p1.at("/payload/items").size());
@@ -169,7 +170,7 @@ class ItemHandlersTest {
 
     @Test
     void getValidatesInputAndUnknownUser() throws Exception {
-        GetItemsHandler h = new GetItemsHandler(service);
+        RequestHandler h = endpoints.getItems();
         assertEquals(400, call(h, "{\"user\":\"abc\"}").get("status").asInt());
         assertEquals(400, call(h, "{\"user\":\"" + PUB + "\",\"limit\":1000}").get("status").asInt());
         assertEquals(404, call(h, "{\"user\":\"99999999999\"}").get("status").asInt());
@@ -179,7 +180,7 @@ class ItemHandlersTest {
 
     @Test
     void privateGetChecksKey() throws Exception {
-        GetPrivateItemsHandler h = new GetPrivateItemsHandler(service, userService);
+        RequestHandler h = endpoints.getPrivateItems();
         assertEquals(401, call(h, "{\"user\":\"" + PUB + "\",\"private_key\":\"bad\"}").get("status").asInt());
         assertEquals(401, call(h, "{\"user\":\"" + PUB + "\"}").get("status").asInt());
         assertEquals(200, call(h, "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\"}").get("status").asInt());
@@ -187,7 +188,7 @@ class ItemHandlersTest {
 
     @Test
     void generateStoresInRedisOnly() throws Exception {
-        GenerateItemsHandler h = new GenerateItemsHandler(service);
+        RequestHandler h = endpoints.generateItemsForUser();
         assertEquals(401, call(h, "{\"user\":\"" + PUB + "\",\"private_key\":\"bad\",\"nb\":2}").get("status").asInt());
         assertEquals(400, call(h, "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":0}").get("status").asInt());
 
@@ -217,10 +218,10 @@ class ItemHandlersTest {
     @Test
     void syncWritesPendingChangesOncePastMaxAge() throws Exception {
         users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", Keys.sha256(PRIV)));
-        JsonNode gen = call(new GenerateItemsHandler(service), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":2}");
+        JsonNode gen = call(endpoints.generateItemsForUser(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":2}");
         int id1 = gen.at("/payload/items/0/id").asInt();
         int id2 = gen.at("/payload/items/1/id").asInt();
-        call(new SellItemsHandler(service), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"items\":[{\"id\":" + id2 + "}]}");
+        call(endpoints.sellItems(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"items\":[{\"id\":" + id2 + "}]}");
         assertTrue(users.get(PUB).dirty());
         int soldPrice = gen.at("/payload/items/1/price").asInt();
 
@@ -263,21 +264,21 @@ class ItemHandlersTest {
     @Test
     void sellAndGenerateRunUnderTheUserLock() throws Exception {
         users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", Keys.sha256(PRIV)));
-        call(new GenerateItemsHandler(service), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":1}");
-        call(new SellItemsHandler(service), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"items\":[{\"id\":3}]}");
+        call(endpoints.generateItemsForUser(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":1}");
+        call(endpoints.sellItems(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"items\":[{\"id\":3}]}");
         assertEquals(java.util.List.of(PUB, PUB), lock.locked);
     }
 
     @Test
     void cachedMoneyIsNotOverwrittenByDatabaseSale() throws Exception {
         users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", Keys.sha256(PRIV)));
-        JsonNode gen = call(new GenerateItemsHandler(service), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":1}");
+        JsonNode gen = call(endpoints.generateItemsForUser(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":1}");
         int id = gen.at("/payload/items/0/id").asInt();
         int price = gen.at("/payload/items/0/price").asInt();
-        call(new SellItemsHandler(service), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"items\":[{\"id\":" + id + "}]}");
+        call(endpoints.sellItems(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"items\":[{\"id\":" + id + "}]}");
         assertEquals(1000 + price, users.get(PUB).user().money());
 
-        JsonNode r = call(new SellItemsHandler(service), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"items\":[{\"id\":3}]}");
+        JsonNode r = call(endpoints.sellItems(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"items\":[{\"id\":3}]}");
         assertEquals(1000 + price + 50, r.at("/payload/money").asInt());
         assertEquals(1000 + price + 50, users.get(PUB).user().money());
     }
@@ -285,13 +286,13 @@ class ItemHandlersTest {
     @Test
     void sellGeneratedItemsStaysInRedis() throws Exception {
         users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", Keys.sha256(PRIV)));
-        JsonNode gen = call(new GenerateItemsHandler(service), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":2}");
+        JsonNode gen = call(endpoints.generateItemsForUser(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":2}");
         int id1 = gen.at("/payload/items/0/id").asInt();
         int id2 = gen.at("/payload/items/1/id").asInt();
         int expected = gen.at("/payload/items/0/price").asInt() + gen.at("/payload/items/1/price").asInt();
         int reads = dbReads.get();
 
-        JsonNode r = call(new SellItemsHandler(service),
+        JsonNode r = call(endpoints.sellItems(),
                 "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"items\":[{\"id\":" + id1 + "},{\"id\":" + id2 + "}]}");
         assertEquals(200, r.get("status").asInt());
         assertEquals(expected, r.at("/payload/totalPrice").asInt());
@@ -305,11 +306,11 @@ class ItemHandlersTest {
     @Test
     void sellMixedAddsRedisValueInOneDbCall() throws Exception {
         users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", Keys.sha256(PRIV)));
-        JsonNode gen = call(new GenerateItemsHandler(service), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":1}");
+        JsonNode gen = call(endpoints.generateItemsForUser(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":1}");
         int id = gen.at("/payload/items/0/id").asInt();
         int price = gen.at("/payload/items/0/price").asInt();
 
-        JsonNode r = call(new SellItemsHandler(service),
+        JsonNode r = call(endpoints.sellItems(),
                 "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"items\":[{\"id\":" + id + "},{\"id\":3}]}");
         assertEquals(200, r.get("status").asInt());
         assertEquals(50 + price, r.at("/payload/totalPrice").asInt());
@@ -319,10 +320,10 @@ class ItemHandlersTest {
     @Test
     void sellRemovesFromCacheAndCreditsMoney() throws Exception {
         users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", Keys.sha256(PRIV)));
-        GetItemsHandler get = new GetItemsHandler(service);
+        RequestHandler get = endpoints.getItems();
         call(get, "{\"user\":\"" + PUB + "\"}");
 
-        SellItemsHandler sell = new SellItemsHandler(service);
+        RequestHandler sell = endpoints.sellItems();
         JsonNode r = call(sell, "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"items\":[{\"id\":1},{\"id\":2},{\"id\":2}]}");
         assertEquals(200, r.get("status").asInt());
         assertEquals(350, r.at("/payload/totalPrice").asInt());
