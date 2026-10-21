@@ -2,14 +2,14 @@ package org.bogomips.treasureInc.engine.sync;
 
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
-import org.bogomips.treasureInc.engine.item.application.ItemCache;
-import org.bogomips.treasureInc.engine.item.domain.ItemInfo;
-import org.bogomips.treasureInc.engine.item.domain.ItemList;
-import org.bogomips.treasureInc.engine.item.domain.ItemRepository;
-import org.bogomips.treasureInc.engine.user.application.CachedSession;
-import org.bogomips.treasureInc.engine.user.application.UserCache;
-import org.bogomips.treasureInc.engine.user.application.UserLock;
-import org.bogomips.treasureInc.engine.user.domain.UserRepository;
+import org.bogomips.treasureInc.engine.item.ItemCache;
+import org.bogomips.treasureInc.engine.item.ItemInfo;
+import org.bogomips.treasureInc.engine.item.ItemList;
+import org.bogomips.treasureInc.engine.item.ItemRepository;
+import org.bogomips.treasureInc.engine.user.CachedSession;
+import org.bogomips.treasureInc.engine.user.UserCache;
+import org.bogomips.treasureInc.engine.user.UserLock;
+import org.bogomips.treasureInc.engine.user.UserRepository;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 

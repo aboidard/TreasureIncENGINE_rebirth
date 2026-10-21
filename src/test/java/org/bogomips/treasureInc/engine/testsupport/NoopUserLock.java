@@ -1,7 +1,7 @@
 package org.bogomips.treasureInc.engine.testsupport;
 
 import io.smallrye.mutiny.Uni;
-import org.bogomips.treasureInc.engine.user.application.UserLock;
+import org.bogomips.treasureInc.engine.user.UserLock;
 
 import java.util.ArrayList;
 import java.util.List;
