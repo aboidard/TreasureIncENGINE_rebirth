@@ -2,14 +2,11 @@ package org.bogomips.treasureInc.engine.sync;
 
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
-import org.bogomips.treasureInc.engine.item.ItemCache;
 import org.bogomips.treasureInc.engine.item.ItemInfo;
-import org.bogomips.treasureInc.engine.item.ItemList;
-import org.bogomips.treasureInc.engine.item.ItemRepository;
-import org.bogomips.treasureInc.engine.user.CachedSession;
-import org.bogomips.treasureInc.engine.user.UserCache;
-import org.bogomips.treasureInc.engine.user.UserLock;
-import org.bogomips.treasureInc.engine.user.UserRepository;
+import org.bogomips.treasureInc.engine.item.ItemService.ItemList;
+import org.bogomips.treasureInc.engine.item.ItemService;
+import org.bogomips.treasureInc.engine.user.UserService.CachedSession;
+import org.bogomips.treasureInc.engine.user.UserService;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
@@ -32,16 +29,16 @@ public class CacheSyncService {
 
     private static final Logger LOG = Logger.getLogger(CacheSyncService.class);
 
-    private final UserCache userCache;
-    private final ItemCache itemCache;
-    private final UserRepository userRepository;
-    private final ItemRepository itemRepository;
-    private final UserLock lock;
+    private final UserService.Cache userCache;
+    private final ItemService.Cache itemCache;
+    private final UserService.Repository userRepository;
+    private final ItemService.Repository itemRepository;
+    private final UserService.Lock lock;
     private final Duration maxAge;
     private final Duration sessionTtl;
 
-    public CacheSyncService(UserCache userCache, ItemCache itemCache, UserRepository userRepository,
-                            ItemRepository itemRepository, UserLock lock,
+    public CacheSyncService(UserService.Cache userCache, ItemService.Cache itemCache, UserService.Repository userRepository,
+                            ItemService.Repository itemRepository, UserService.Lock lock,
                             @ConfigProperty(name = "engine.sync.max-age", defaultValue = "3m") Duration maxAge,
                             @ConfigProperty(name = "engine.sync.session-ttl", defaultValue = "1h") Duration sessionTtl) {
         this.userCache = userCache;

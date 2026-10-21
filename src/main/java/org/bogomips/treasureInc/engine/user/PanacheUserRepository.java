@@ -1,6 +1,5 @@
 package org.bogomips.treasureInc.engine.user;
 
-
 import io.quarkus.hibernate.reactive.panache.Panache;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -9,7 +8,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 
 @ApplicationScoped
-public class PanacheUserRepository implements UserRepository {
+public class PanacheUserRepository implements UserService.Repository {
 
     @Override
     public Uni<UserInfo> login(String publicKey, String privateKey) {

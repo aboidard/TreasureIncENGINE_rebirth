@@ -6,6 +6,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Produces;
 import org.bogomips.treasureInc.engine.messaging.Protocol;
 import org.bogomips.treasureInc.engine.messaging.RequestHandler;
+import org.bogomips.treasureInc.engine.user.UserService.KeyGenerationException;
 
 import java.util.Map;
 

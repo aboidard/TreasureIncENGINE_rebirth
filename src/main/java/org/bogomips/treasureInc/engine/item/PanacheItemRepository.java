@@ -1,10 +1,11 @@
 package org.bogomips.treasureInc.engine.item;
 
-
 import io.quarkus.hibernate.reactive.panache.Panache;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.persistence.LockModeType;
+import org.bogomips.treasureInc.engine.item.ItemService.ItemList;
+import org.bogomips.treasureInc.engine.item.ItemService.SellResult;
 import org.bogomips.treasureInc.engine.user.User;
 
 import java.time.LocalDateTime;
@@ -12,7 +13,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 
 @ApplicationScoped
-public class PanacheItemRepository implements ItemRepository {
+public class PanacheItemRepository implements ItemService.Repository {
 
     @Override
     public Uni<ItemList> findByPublicKey(String publicKey) {

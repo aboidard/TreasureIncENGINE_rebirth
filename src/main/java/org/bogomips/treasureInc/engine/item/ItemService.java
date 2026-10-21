@@ -1,11 +1,12 @@
 package org.bogomips.treasureInc.engine.item;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.bogomips.treasureInc.engine.user.UserService;
 
-
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,12 +16,12 @@ import java.util.stream.IntStream;
 @ApplicationScoped
 public class ItemService {
 
-    private final ItemRepository repository;
-    private final ItemCache itemCache;
+    private final Repository repository;
+    private final Cache itemCache;
     private final UserService users;
     private final ItemGenerator generator = new ItemGenerator(RandomGenerator.getDefault());
 
-    public ItemService(ItemRepository repository, ItemCache itemCache, UserService users) {
+    public ItemService(Repository repository, Cache itemCache, UserService users) {
         this.repository = repository;
         this.itemCache = itemCache;
         this.users = users;
@@ -38,7 +39,7 @@ public class ItemService {
     }
 
     /** 1-based page; emits null when the public key is unknown. */
-    public Uni<ItemPage> page(String publicKey, int page, int limit) {
+    public Uni<Page> page(String publicKey, int page, int limit) {
         return list(publicKey).map(list -> {
             if (!list.userFound()) {
                 return null;
@@ -47,7 +48,7 @@ public class ItemService {
             long from = (long) (page - 1) * limit;
             List<ItemInfo> slice = from >= all.size() ? List.of()
                     : all.subList((int) from, (int) Math.min(all.size(), from + limit));
-            return new ItemPage(slice, page, limit, all.size());
+            return new Page(slice, page, limit, all.size());
         });
     }
 
@@ -135,5 +136,66 @@ public class ItemService {
 
     private static int price(ItemInfo item) {
         return item.price() == null ? 0 : item.price();
+    }
+
+    // ---- values
+
+    /** All the items of a user; userFound=false is a cached "unknown public key" marker. */
+    public record ItemList(
+            @JsonProperty("userFound") boolean userFound,
+            @JsonProperty("items") List<ItemInfo> items) {
+
+        public static ItemList unknownUser() {
+            return new ItemList(false, List.of());
+        }
+    }
+
+    public record Page(List<ItemInfo> items, int page, int limit, int total) {
+    }
+
+    public record SellResult(Status status, int totalPrice, int money, List<Integer> soldIds) {
+
+        public enum Status { OK, UNAUTHORIZED, NOT_FOUND }
+
+        public static SellResult of(Status status) {
+            return new SellResult(status, 0, 0, List.of());
+        }
+    }
+
+    // ---- ports, implemented by the Panache and Redis adapters
+
+    public interface Repository {
+        /** All items of the user ordered by id; ItemList.unknownUser() when the public key does not exist. */
+        Uni<ItemList> findByPublicKey(String publicKey);
+
+        /**
+         * Atomically deletes the database items (all must belong to the user; ids may be empty) and credits their
+         * price to the user's money; extraMoney is the value of Redis-only items sold alongside.
+         */
+        Uni<SellResult> sell(String publicKey, String privateKey, List<Integer> ids, int extraMoney);
+
+        /** Inserts Redis-only items for the user; emits their new database ids, in the same order. */
+        Uni<List<Integer>> insertAll(int userId, List<ItemInfo> items);
+
+        Uni<Void> deleteByIds(int userId, List<Integer> ids);
+    }
+
+    public interface Cache {
+        /** Null when nothing is cached for this public key. */
+        Uni<ItemList> get(String publicKey);
+
+        Uni<Void> put(String publicKey, ItemList list);
+
+        /** Stores the list without expiry: used for Redis-only items, which have no database copy. */
+        Uni<Void> persist(String publicKey, ItemList list);
+
+        /** Reserves {@code count} consecutive ids for Redis-only items (negative, so they never clash with database ids); returns the first. */
+        Uni<Integer> reserveIds(int count);
+
+        /** Removes the given item ids from the cached list, if any. */
+        Uni<Void> removeIds(String publicKey, Collection<Integer> ids);
+
+        /** Drops the cached list, whatever its expiry. */
+        Uni<Void> evict(String publicKey);
     }
 }

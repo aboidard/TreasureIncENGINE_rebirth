@@ -1,6 +1,5 @@
 package org.bogomips.treasureInc.engine.user;
 
-
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.quarkus.redis.datasource.ReactiveRedisDataSource;
@@ -9,9 +8,10 @@ import io.quarkus.redis.datasource.ScanArgs;
 import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
+import org.bogomips.treasureInc.engine.user.UserService.CachedSession;
 
 @ApplicationScoped
-public class RedisUserCache implements UserCache {
+public class RedisUserCache implements UserService.Cache {
 
     static final String KEY = "treasure_inc.users.logged";
     private static final int SCAN_BATCH = 200;

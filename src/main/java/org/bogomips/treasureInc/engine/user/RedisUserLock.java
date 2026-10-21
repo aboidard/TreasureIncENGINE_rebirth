@@ -7,6 +7,7 @@ import io.vertx.redis.client.Command;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
+import org.bogomips.treasureInc.engine.user.UserService.LockTimeoutException;
 
 import java.time.Duration;
 import java.util.UUID;
@@ -18,7 +19,7 @@ import java.util.function.Supplier;
  * critical section.
  */
 @ApplicationScoped
-public class RedisUserLock implements UserLock {
+public class RedisUserLock implements UserService.Lock {
 
     private static final Logger LOG = Logger.getLogger(RedisUserLock.class);
 
