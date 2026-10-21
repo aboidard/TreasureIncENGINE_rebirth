@@ -13,7 +13,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 
 @ApplicationScoped
-public class PanacheItemRepository implements ItemService.Repository {
+class PanacheItemRepository implements ItemService.Repository {
 
     @Override
     public Uni<ItemList> findByPublicKey(String publicKey) {

@@ -12,11 +12,11 @@ import java.util.Map;
 
 /** User request types: validates params, calls {@link UserService} and shapes the reply. */
 @ApplicationScoped
-public class UserEndpoints {
+class UserEndpoints {
 
     private final UserService users;
 
-    public UserEndpoints(UserService users) {
+    UserEndpoints(UserService users) {
         this.users = users;
     }
 

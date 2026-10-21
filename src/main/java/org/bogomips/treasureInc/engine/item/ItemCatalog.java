@@ -9,7 +9,7 @@ import java.util.random.RandomGenerator;
  * A generated item keeps its description as an id: its index in the rarity's list, as stored in Redis,
  * so only ever append to those lists.
  */
-public class ItemCatalog {
+class ItemCatalog {
 
     public enum Rarity {
         COMMON("common", 1),
@@ -180,7 +180,7 @@ public class ItemCatalog {
 
     private final RandomGenerator random;
 
-    public ItemCatalog(RandomGenerator random) {
+    ItemCatalog(RandomGenerator random) {
         this.random = random;
     }
 

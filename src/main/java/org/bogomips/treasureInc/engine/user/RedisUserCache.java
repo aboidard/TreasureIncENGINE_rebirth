@@ -11,7 +11,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import org.bogomips.treasureInc.engine.user.UserService.CachedSession;
 
 @ApplicationScoped
-public class RedisUserCache implements UserService.Cache {
+class RedisUserCache implements UserService.Cache {
 
     static final String KEY = "treasure_inc.users.logged";
     private static final int SCAN_BATCH = 200;
@@ -19,7 +19,7 @@ public class RedisUserCache implements UserService.Cache {
     private final ReactiveHashCommands<String, String, String> hash;
     private final ObjectMapper mapper;
 
-    public RedisUserCache(ReactiveRedisDataSource redis, ObjectMapper mapper) {
+    RedisUserCache(ReactiveRedisDataSource redis, ObjectMapper mapper) {
         this.hash = redis.hash(String.class, String.class, String.class);
         this.mapper = mapper;
     }

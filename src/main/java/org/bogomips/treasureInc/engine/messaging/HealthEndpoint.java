@@ -14,7 +14,7 @@ import java.util.Map;
 
 /** Answers "healthcheck" requests with the result of the liveness check (also served on /q/health/live). */
 @ApplicationScoped
-public class HealthEndpoint implements RequestHandler {
+class HealthEndpoint implements RequestHandler {
 
     @Liveness
     public static class Alive implements HealthCheck {

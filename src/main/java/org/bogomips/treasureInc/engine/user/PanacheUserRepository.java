@@ -8,7 +8,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 
 @ApplicationScoped
-public class PanacheUserRepository implements UserService.Repository {
+class PanacheUserRepository implements UserService.Repository {
 
     @Override
     public Uni<UserInfo> login(String publicKey, String privateKey) {

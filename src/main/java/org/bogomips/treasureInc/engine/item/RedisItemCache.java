@@ -19,7 +19,7 @@ import java.util.HashSet;
  * public API by users who never logged in cannot grow Redis without bound.
  */
 @ApplicationScoped
-public class RedisItemCache implements ItemService.Cache {
+class RedisItemCache implements ItemService.Cache {
 
     static final String KEY_PREFIX = "treasure_inc.items.";
     static final String ID_SEQUENCE_KEY = "treasure_inc.items_seq.redis_only";
@@ -30,7 +30,7 @@ public class RedisItemCache implements ItemService.Cache {
     private final long ttlSeconds;
     private final long unknownUserTtlSeconds;
 
-    public RedisItemCache(ReactiveRedisDataSource redis, ObjectMapper mapper,
+    RedisItemCache(ReactiveRedisDataSource redis, ObjectMapper mapper,
                           @ConfigProperty(name = "engine.items.cache-ttl-seconds", defaultValue = "300") long ttlSeconds,
                           @ConfigProperty(name = "engine.items.unknown-user-ttl-seconds", defaultValue = "60") long unknownUserTtlSeconds) {
         this.values = redis.value(String.class, String.class);
