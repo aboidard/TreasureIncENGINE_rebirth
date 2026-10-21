@@ -19,12 +19,14 @@ public class ItemService {
     private final Repository repository;
     private final Cache itemCache;
     private final UserService users;
+    private final UserService.Lock lock;
     private final ItemCatalog catalog = new ItemCatalog(RandomGenerator.getDefault());
 
-    public ItemService(Repository repository, Cache itemCache, UserService users) {
+    public ItemService(Repository repository, Cache itemCache, UserService users, UserService.Lock lock) {
         this.repository = repository;
         this.itemCache = itemCache;
         this.users = users;
+        this.lock = lock;
     }
 
     /** Served from Redis when present (including the "unknown user" marker); the database is only hit on a miss. */
@@ -57,7 +59,7 @@ public class ItemService {
      * The list is kept without expiry since Redis is then its only copy.
      */
     public Uni<List<ItemInfo>> generate(String publicKey, String privateKey, int count) {
-        return users.withLock(publicKey, () -> generateLocked(publicKey, privateKey, count));
+        return lock.withLock(publicKey, () -> generateLocked(publicKey, privateKey, count));
     }
 
     private Uni<List<ItemInfo>> generateLocked(String publicKey, String privateKey, int count) {
@@ -85,7 +87,7 @@ public class ItemService {
      * has no cached session to credit (the Redis-only value is then added in the same transaction).
      */
     public Uni<SellResult> sell(String publicKey, String privateKey, List<Integer> ids) {
-        return users.withLock(publicKey, () -> sellLocked(publicKey, privateKey, ids));
+        return lock.withLock(publicKey, () -> sellLocked(publicKey, privateKey, ids));
     }
 
     private Uni<SellResult> sellLocked(String publicKey, String privateKey, List<Integer> ids) {

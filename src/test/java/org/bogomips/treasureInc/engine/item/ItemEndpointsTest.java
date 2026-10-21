@@ -159,7 +159,7 @@ class ItemEndpointsTest {
         }
     };
     private final UserService userService = new UserService(userRepo, userCache, lock, 10000);
-    private final ItemService service = new ItemService(itemRepo, cache, userService);
+    private final ItemService service = new ItemService(itemRepo, cache, userService, lock);
     private final ItemEndpoints endpoints = new ItemEndpoints(service, userService);
 
     private JsonNode call(RequestHandler h, String json) throws Exception {
