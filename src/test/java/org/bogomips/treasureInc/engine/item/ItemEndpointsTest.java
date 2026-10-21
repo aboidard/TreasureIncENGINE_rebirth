@@ -150,7 +150,14 @@ class ItemEndpointsTest {
         }
     };
 
-    private final org.bogomips.treasureInc.engine.testsupport.NoopUserLock lock = new org.bogomips.treasureInc.engine.testsupport.NoopUserLock();
+    /** Single-threaded tests need no mutual exclusion; only records the keys it was asked to lock. */
+    private final List<String> locked = new ArrayList<>();
+    private final UserService.Lock lock = new UserService.Lock() {
+        public <T> Uni<T> withLock(String publicKey, java.util.function.Supplier<Uni<T>> action) {
+            locked.add(publicKey);
+            return Uni.createFrom().deferred(action::get);
+        }
+    };
     private final UserService userService = new UserService(userRepo, userCache, lock, 10000);
     private final ItemService service = new ItemService(itemRepo, cache, userService);
     private final ItemEndpoints endpoints = new ItemEndpoints(service, userService);
@@ -270,7 +277,7 @@ class ItemEndpointsTest {
         users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", CachedSession.hashKey(PRIV)));
         call(endpoints.generateItemsForUser(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":1}");
         call(endpoints.sellItems(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"items\":[{\"id\":3}]}");
-        assertEquals(java.util.List.of(PUB, PUB), lock.locked);
+        assertEquals(java.util.List.of(PUB, PUB), locked);
     }
 
     @Test
