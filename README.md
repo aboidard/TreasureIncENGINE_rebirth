@@ -1,80 +1,98 @@
-# engine
+# Treasure Inc. — Engine
 
-This project uses Quarkus, the Supersonic Subatomic Java Framework.
+Moteur de jeu côté serveur de **Treasure Inc.**, un jeu mobile (Android, Unity) de chasse au trésor et de gestion d'inventaire.
+Ce dépôt est la réécriture (« rebirth ») du moteur d'origine en **Java 21 / Quarkus**, avec une architecture réactive orientée messages.
 
-If you want to learn more about Quarkus, please visit its website: <https://quarkus.io/>.
+> Le moteur n'est pas exposé publiquement : il ne reçoit des requêtes qu'à travers un bus de messages interne, alimenté par l'API du jeu.
 
-## Running the application in dev mode
+---
 
-You can run your application in dev mode that enables live coding using:
+## Vue d'ensemble du projet
 
-```shell script
-./mvnw quarkus:dev
+Treasure Inc. est découpé en plusieurs dépôts :
+
+| Composant | Rôle | Stack |
+|---|---|---|
+| Client mobile | Le jeu | Unity (C#), Android |
+| Landing page | Site vitrine | Next.js |
+| API | Point d'entrée des clients, authentification, relais vers le moteur | Node.js / Express |
+| **Engine** (ce dépôt) | Logique métier : joueurs, objets, économie | Java 21, Quarkus |
+| Maestro | Outillage d'administration et d'exploitation | Java, Quarkus |
+
+```mermaid
+flowchart LR
+    C[Client Unity] -->|HTTPS| A[API Express]
+    A -->|requête| B[(Bus de messages<br/>Redis Pub/Sub)]
+    B --> E[Engine Quarkus]
+    E -->|réponse| B
+    B --> A
+    E <-->|état chaud| R[(Redis)]
+    E -->|persistance différée| P[(PostgreSQL)]
 ```
 
-> **_NOTE:_**  Quarkus now ships with a Dev UI, which is available in dev mode only at <http://localhost:8080/q/dev/>.
+## Architecture du moteur
 
-## Packaging and running the application
+### Communication par messages
+L'API et le moteur ne se parlent pas en HTTP mais via un **canal de requêtes / réponses asynchrone** (pattern *request-reply* avec identifiant de corrélation).
+Cela découple les deux services, permet de redémarrer ou de multiplier les instances du moteur sans impacter l'API, et garde le moteur hors de toute surface réseau publique.
 
-The application can be packaged using:
+Côté moteur, la chaîne de traitement est :
 
-```shell script
-./mvnw package
+1. **Adaptateur de transport** — s'abonne au canal, gère la reconnexion automatique et isole les trames inattendues.
+2. **Dispatcher** — indépendant du transport : il valide l'enveloppe, route vers le bon handler et construit la réponse.
+3. **Handlers** — un bean CDI par type de requête. Ajouter une fonctionnalité revient à ajouter un handler, sans toucher au reste.
+
+### Cache « write-behind »
+L'état chaud des sessions de jeu (solde, inventaire) vit dans **Redis** pour des temps de réponse très faibles.
+Un **job planifié** (Quarkus Scheduler) écrit périodiquement en base les sessions modifiées, puis évince les sessions inactives.
+Le compromis est assumé : peu d'écritures en base pendant le jeu, et une fenêtre de resynchronisation bornée et configurable.
+
+### Cohérence et concurrence
+- **Verrou distribué par joueur** sur Redis (acquisition atomique, libération réservée au propriétaire, expiration de sécurité) : les actions d'un même joueur sont sérialisées, même avec plusieurs instances du moteur.
+- La synchronisation travaille toujours sur une copie fraîche de la session, sous verrou, et sait réconcilier les objets créés ou vendus pendant l'écriture.
+- Parcours incrémental du cache (jamais tout chargé en mémoire).
+
+### Stack réactive
+Tout le moteur est **non bloquant** : Mutiny, Vert.x, Hibernate Reactive Panache et client PostgreSQL réactif.
+Les accès aux données sont derrière des interfaces (cache, dépôt, verrou), ce qui rend les services testables sans infrastructure.
+
+### Génération procédurale
+Les objets trouvés en expédition sont générés à partir de catalogues de textes et d'une table de rareté pondérée, avec gestion de l'accord grammatical (genre, articles) en français.
+
+### Observabilité
+- Logs structurés `clé=valeur` (lisibles et exploitables dans Kibana), JSON en production, **masquage automatique** des champs sensibles et troncature des charges volumineuses.
+- Métriques **Prometheus** (Micrometer) et sondes de santé **SmallRye Health**.
+
+## Organisation du code
+
+```
+src/main/java/.../engine
+├── messaging   transport, dispatcher, contrat des handlers, format des réponses
+├── user        joueurs : service, cache, verrou, persistance, handlers
+├── item        objets : génération, cache, persistance, handlers
+└── sync        synchronisation planifiée cache → base de données
 ```
 
-It produces the `quarkus-run.jar` file in the `target/quarkus-app/` directory.
-Be aware that it’s not an _über-jar_ as the dependencies are copied into the `target/quarkus-app/lib/` directory.
+Le code est organisé **par domaine métier** plutôt que par couche technique, chaque domaine exposant ses ports (interfaces) et ses adaptateurs Redis / PostgreSQL.
 
-The application is now runnable using `java -jar target/quarkus-app/quarkus-run.jar`.
+## Qualité
 
-If you want to build an _über-jar_, execute the following command:
+- Tests unitaires du dispatcher et des handlers (JUnit, Quarkus test).
+- Configuration externalisée (YAML + profils), aucun réglage métier en dur.
+- Images Docker JVM et **natives (GraalVM)** pour des démarrages rapides et une empreinte mémoire réduite.
 
-```shell script
-./mvnw package -Dquarkus.package.jar.type=uber-jar
+## Lancer le projet en local
+
+Prérequis : JDK 21, une instance PostgreSQL et une instance Redis.
+Les paramètres de connexion se fournissent par variables d'environnement (convention Quarkus, par ex. `QUARKUS_DATASOURCE_USERNAME`, `QUARKUS_REDIS_HOSTS`…), jamais dans le dépôt.
+
+```shell
+./mvnw quarkus:dev          # mode développement avec rechargement à chaud
+./mvnw test                 # tests
+./mvnw package              # build JVM
+./mvnw package -Dnative     # build natif (GraalVM ou build en conteneur)
 ```
 
-The application, packaged as an _über-jar_, is now runnable using `java -jar target/*-runner.jar`.
+## Auteur
 
-## Creating a native executable
-
-You can create a native executable using:
-
-```shell script
-./mvnw package -Dnative
-```
-
-Or, if you don't have GraalVM installed, you can run the native executable build in a container using:
-
-```shell script
-./mvnw package -Dnative -Dquarkus.native.container-build=true
-```
-
-You can then execute your native executable with: `./target/engine-1.0.0-SNAPSHOT-runner`
-
-If you want to learn more about building native executables, please consult <https://quarkus.io/guides/maven-tooling>.
-
-## Related Guides
-
-- Micrometer Registry Prometheus ([guide](https://quarkus.io/guides/micrometer)): Enable Prometheus support for Micrometer
-- YAML Configuration ([guide](https://quarkus.io/guides/config-yaml)): Use YAML to configure your Quarkus application
-- Scheduler ([guide](https://quarkus.io/guides/scheduler)): Schedule recurring tasks and periodic jobs using cron expressions or fixed intervals
-- Logging JSON ([guide](https://quarkus.io/guides/logging#json-logging)): Add JSON formatter for console logging
-- SmallRye Health ([guide](https://quarkus.io/guides/smallrye-health)): Monitor service health
-- Redis Client ([guide](https://quarkus.io/guides/redis)): Connect to Redis in either imperative or reactive style
-- Reactive PostgreSQL client ([guide](https://quarkus.io/guides/reactive-sql-clients)): Connect to the PostgreSQL database using the reactive pattern
-
-## Provided Code
-
-### YAML Config
-
-Configure your application with YAML
-
-[Related guide section...](https://quarkus.io/guides/config-reference#configuration-examples)
-
-The Quarkus application configuration is located in `src/main/resources/application.yml`.
-
-### SmallRye Health
-
-Monitor your application's health using SmallRye Health
-
-[Related guide section...](https://quarkus.io/guides/smallrye-health)
+Arnaud Boidard — conception et développement de l'ensemble du projet Treasure Inc.
