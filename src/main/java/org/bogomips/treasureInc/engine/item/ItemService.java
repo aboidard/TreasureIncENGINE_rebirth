@@ -9,10 +9,11 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.random.RandomGenerator;
-import java.util.stream.IntStream;
 
 @ApplicationScoped
 public class ItemService {
@@ -22,15 +23,24 @@ public class ItemService {
     private final UserService users;
     private final UserService.Lock lock;
     private final ItemCatalog catalog;
+    private final int idBlockSize;
 
-    /** @param graphicsCount number of item sprites in the client (ItemManager.sprites); a graphics id is below it */
+    /**
+     * @param graphicsCount number of item sprites in the client (ItemManager.sprites); a graphics id is below it
+     * @param idBlockSize   how many ids are reserved from the database sequence at once
+     */
     public ItemService(Repository repository, Cache itemCache, UserService users, UserService.Lock lock,
-                       @ConfigProperty(name = "engine.items.graphics-count") int graphicsCount) {
+                       @ConfigProperty(name = "engine.items.graphics-count") int graphicsCount,
+                       @ConfigProperty(name = "engine.items.id-block-size", defaultValue = "100") int idBlockSize) {
+        if (idBlockSize < 1) {
+            throw new IllegalArgumentException("engine.items.id-block-size must be at least 1, got " + idBlockSize);
+        }
         this.repository = repository;
         this.itemCache = itemCache;
         this.users = users;
         this.lock = lock;
         this.catalog = new ItemCatalog(RandomGenerator.getDefault(), graphicsCount);
+        this.idBlockSize = idBlockSize;
     }
 
     /** Served from Redis when present (including the "unknown user" marker); the database is only hit on a miss. */
@@ -59,7 +69,8 @@ public class ItemService {
     }
 
     /**
-     * Generates items straight into the user's Redis list (no database write); emits null on bad credentials.
+     * Generates items straight into the user's Redis list (no database write), with their final ids, pending until
+     * the next synchronization inserts them; emits null on bad credentials.
      * The list is kept without expiry since Redis is then its only copy.
      */
     public Uni<List<ItemInfo>> generate(String publicKey, String privateKey, int count) {
@@ -71,12 +82,14 @@ public class ItemService {
             if (user == null) {
                 return Uni.createFrom().nullItem();
             }
-            return itemCache.reserveIds(count).flatMap(firstId -> {
-                List<ItemInfo> generated = IntStream.range(0, count).mapToObj(i -> catalog.generate(firstId + i)).toList();
+            return newIds(count).flatMap(ids -> {
+                List<ItemInfo> generated = ids.stream().map(catalog::generate).toList();
                 return list(publicKey).flatMap(current -> {
                     List<ItemInfo> all = new ArrayList<>(current.userFound() ? current.items() : List.of());
                     all.addAll(generated);
-                    return itemCache.persist(publicKey, new ItemList(true, all))
+                    Set<Integer> pending = new HashSet<>(current.pendingIds());
+                    pending.addAll(ids);
+                    return itemCache.persist(publicKey, new ItemList(true, all, pending))
                             .flatMap(v -> users.markDirty(publicKey))
                             .replaceWith(generated);
                 });
@@ -85,10 +98,31 @@ public class ItemService {
     }
 
     /**
+     * Final ids for new items, so an item keeps its id once written to the database. They come from the pool of
+     * reserved ids; when it runs low, a block of {@code idBlockSize} values is taken from the database sequence in
+     * one call, and what is not used now goes to the pool.
+     */
+    private Uni<List<Integer>> newIds(int count) {
+        return itemCache.takeIds(count).flatMap(pooled -> {
+            int missing = count - pooled.size();
+            if (missing == 0) {
+                return Uni.createFrom().item(pooled);
+            }
+            return repository.nextIds(Math.max(idBlockSize, missing)).flatMap(reserved -> {
+                List<Integer> ids = new ArrayList<>(pooled);
+                ids.addAll(reserved.subList(0, missing));
+                List<Integer> spare = reserved.subList(missing, reserved.size());
+                Uni<Void> keep = spare.isEmpty() ? Uni.createFrom().voidItem() : itemCache.addIds(spare);
+                return keep.replaceWith(ids);
+            });
+        });
+    }
+
+    /**
      * The whole operation runs under the user's lock, so two concurrent sells/generations cannot overwrite each other.
-     * Sells from the Redis list. Items are validated against the cached list; Redis-only items (negative ids)
+     * Sells from the Redis list. Items are validated against the cached list; pending items (not yet inserted)
      * never touch the database. The database is only called when database items are sold, or when the user
-     * has no cached session to credit (the Redis-only value is then added in the same transaction).
+     * has no cached session to credit (the pending items' value is then added in the same transaction).
      */
     public Uni<SellResult> sell(String publicKey, String privateKey, List<Integer> ids) {
         return lock.withLock(publicKey, () -> sellLocked(publicKey, privateKey, ids));
@@ -105,8 +139,9 @@ public class ItemService {
                 if (!byId.keySet().containsAll(ids)) {
                     return Uni.createFrom().item(SellResult.of(SellResult.Status.NOT_FOUND));
                 }
-                List<Integer> dbIds = ids.stream().filter(id -> id >= 0).toList();
-                int redisTotal = ids.stream().filter(id -> id < 0).mapToInt(id -> price(byId.get(id))).sum();
+                Set<Integer> pending = list.pendingIds();
+                List<Integer> dbIds = ids.stream().filter(id -> !pending.contains(id)).toList();
+                int redisTotal = ids.stream().filter(pending::contains).mapToInt(id -> price(byId.get(id))).sum();
                 if (dbIds.isEmpty()) {
                     return sellRedisOnly(publicKey, privateKey, ids, redisTotal);
                 }
@@ -146,10 +181,24 @@ public class ItemService {
 
     // ---- values
 
-    /** All the items of a user; userFound=false is a cached "unknown public key" marker. */
+    /**
+     * All the items of a user; userFound=false is a cached "unknown public key" marker.
+     * pendingIds are the generated items not yet written to the database (the next synchronization inserts them,
+     * keeping their id).
+     */
     public record ItemList(
             @JsonProperty("userFound") boolean userFound,
-            @JsonProperty("items") List<ItemInfo> items) {
+            @JsonProperty("items") List<ItemInfo> items,
+            @JsonProperty("pendingIds") Set<Integer> pendingIds) {
+
+        public ItemList {
+            pendingIds = pendingIds == null ? Set.of() : Set.copyOf(pendingIds);
+        }
+
+        /** A list with nothing waiting for the database, as read from it. */
+        public ItemList(boolean userFound, List<ItemInfo> items) {
+            this(userFound, items, Set.of());
+        }
 
         public static ItemList unknownUser() {
             return new ItemList(false, List.of());
@@ -176,12 +225,15 @@ public class ItemService {
 
         /**
          * Atomically deletes the database items (all must belong to the user; ids may be empty) and credits their
-         * price to the user's money; extraMoney is the value of Redis-only items sold alongside.
+         * price to the user's money; extraMoney is the value of pending (not yet inserted) items sold alongside.
          */
         Uni<SellResult> sell(String publicKey, String privateKey, List<Integer> ids, int extraMoney);
 
-        /** Inserts Redis-only items for the user; emits their new database ids, in the same order. */
-        Uni<List<Integer>> insertAll(int userId, List<ItemInfo> items);
+        /** Takes {@code count} values from the items id sequence in one round trip: unique, not always consecutive. */
+        Uni<List<Integer>> nextIds(int count);
+
+        /** Inserts pending items for the user, with the ids they already have. */
+        Uni<Void> insertAll(int userId, List<ItemInfo> items);
 
         Uni<Void> deleteByIds(int userId, List<Integer> ids);
     }
@@ -192,13 +244,16 @@ public class ItemService {
 
         Uni<Void> put(String publicKey, ItemList list);
 
-        /** Stores the list without expiry: used for Redis-only items, which have no database copy. */
+        /** Stores the list without expiry: used while it holds pending items, which have no database copy. */
         Uni<Void> persist(String publicKey, ItemList list);
 
-        /** Reserves {@code count} consecutive ids for Redis-only items (negative, so they never clash with database ids); returns the first. */
-        Uni<Integer> reserveIds(int count);
+        /** Takes up to {@code count} ids from the pool of reserved ids, shared by every engine instance; fewer (or none) when it runs low. */
+        Uni<List<Integer>> takeIds(int count);
 
-        /** Removes the given item ids from the cached list, if any. */
+        /** Puts reserved ids, taken from the database sequence, in the pool. */
+        Uni<Void> addIds(List<Integer> ids);
+
+        /** Removes the given item ids from the cached list (items and pending ids), if any. */
         Uni<Void> removeIds(String publicKey, Collection<Integer> ids);
 
         /** Drops the cached list, whatever its expiry. */

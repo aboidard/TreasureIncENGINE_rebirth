@@ -10,6 +10,9 @@ engine:
     # number of item sprites in the Unity client (ItemManager.sprites in the MainMenu scene);
     # generated items get a graphics id in [0, graphics-count)
     graphics-count: 181
+    # how many item ids are reserved at once from the database sequence (items_id_seq): generated items get their
+    # final id right away; the unused ones wait in Redis (treasure_inc.items_id_pool) for the next generations
+    id-block-size: 100
   sync:
     # how often the scheduler looks at the logged users
     check-interval: 30s

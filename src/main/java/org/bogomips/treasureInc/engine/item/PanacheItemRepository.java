@@ -28,10 +28,20 @@ class PanacheItemRepository implements ItemService.Repository {
     }
 
     @Override
-    public Uni<List<Integer>> insertAll(int userId, List<ItemInfo> items) {
+    public Uni<List<Integer>> nextIds(int count) {
+        return Panache.withSession(() -> Panache.getSession().flatMap(session -> session
+                .createNativeQuery("SELECT nextval('public.items_id_seq') FROM generate_series(1, :count)", Long.class)
+                .setParameter("count", count)
+                .getResultList()))
+                .map(values -> values.stream().map(Math::toIntExact).toList());
+    }
+
+    @Override
+    public Uni<Void> insertAll(int userId, List<ItemInfo> items) {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         List<Item> entities = items.stream().map(i -> {
             Item e = new Item();
+            e.id = i.id();
             e.name = i.name();
             e.description = i.resolvedDescription();
             e.graphics = i.graphics();
@@ -42,8 +52,7 @@ class PanacheItemRepository implements ItemService.Repository {
             e.updatedAt = now;
             return e;
         }).toList();
-        return Panache.withTransaction(() -> Item.persist(entities))
-                .map(v -> entities.stream().map(e -> e.id).toList());
+        return Panache.withTransaction(() -> Item.persist(entities));
     }
 
     @Override

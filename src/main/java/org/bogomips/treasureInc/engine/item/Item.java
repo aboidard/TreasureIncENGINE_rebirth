@@ -3,10 +3,7 @@ package org.bogomips.treasureInc.engine.item;
 import io.quarkus.hibernate.reactive.panache.PanacheEntityBase;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
-import jakarta.persistence.SequenceGenerator;
 import jakarta.persistence.Table;
 
 import java.time.LocalDateTime;
@@ -16,9 +13,8 @@ import java.time.ZoneOffset;
 @Table(name = "items", schema = "public")
 public class Item extends PanacheEntityBase {
 
+    /** Assigned by the engine when the item is generated, from the items_id_seq sequence (see ItemService). */
     @Id
-    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "items_id_seq")
-    @SequenceGenerator(name = "items_id_seq", sequenceName = "items_id_seq", schema = "public", allocationSize = 1)
     public Integer id;
 
     public String name;
