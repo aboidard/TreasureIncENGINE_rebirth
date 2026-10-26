@@ -85,6 +85,7 @@ src/main/java/.../engine
 ├── messaging   transport, dispatcher, contrat des handlers, format des réponses
 ├── user        joueurs : service, cache, verrou, persistance, handlers
 ├── item        objets : génération, cache, persistance, handlers
+├── expedition  expéditions : handlers, noms générés
 └── sync        synchronisation planifiée cache → base de données
 ```
 
