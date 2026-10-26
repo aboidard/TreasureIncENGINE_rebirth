@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.bogomips.treasureInc.engine.user.UserService;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -20,13 +21,16 @@ public class ItemService {
     private final Cache itemCache;
     private final UserService users;
     private final UserService.Lock lock;
-    private final ItemCatalog catalog = new ItemCatalog(RandomGenerator.getDefault());
+    private final ItemCatalog catalog;
 
-    public ItemService(Repository repository, Cache itemCache, UserService users, UserService.Lock lock) {
+    /** @param graphicsCount number of item sprites in the client (ItemManager.sprites); a graphics id is below it */
+    public ItemService(Repository repository, Cache itemCache, UserService users, UserService.Lock lock,
+                       @ConfigProperty(name = "engine.items.graphics-count") int graphicsCount) {
         this.repository = repository;
         this.itemCache = itemCache;
         this.users = users;
         this.lock = lock;
+        this.catalog = new ItemCatalog(RandomGenerator.getDefault(), graphicsCount);
     }
 
     /** Served from Redis when present (including the "unknown user" marker); the database is only hit on a miss. */

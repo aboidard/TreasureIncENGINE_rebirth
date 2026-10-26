@@ -21,6 +21,7 @@ class ItemEndpointsTest {
 
     private static final String PUB = "12345678900";
     private static final String PRIV = "secret";
+    private static final int GRAPHICS_COUNT = 7;
 
     private final ObjectMapper mapper = new ObjectMapper();
     private final AtomicInteger dbReads = new AtomicInteger();
@@ -159,7 +160,7 @@ class ItemEndpointsTest {
         }
     };
     private final UserService userService = new UserService(userRepo, userCache, lock, 10000);
-    private final ItemService service = new ItemService(itemRepo, cache, userService, lock);
+    private final ItemService service = new ItemService(itemRepo, cache, userService, lock, GRAPHICS_COUNT);
     private final ItemEndpoints endpoints = new ItemEndpoints(service, userService);
 
     private JsonNode call(RequestHandler h, String json) throws Exception {
@@ -210,6 +211,8 @@ class ItemEndpointsTest {
             assertTrue(i.get("id").asInt() < 0);
             assertTrue(i.get("description").isTextual());
             assertFalse(i.get("name").asText().isBlank());
+            int graphics = i.get("graphics").asInt(-1);
+            assertTrue(i.get("graphics").isInt() && graphics >= 0 && graphics < GRAPHICS_COUNT, "graphics " + i.get("graphics"));
         }
         assertEquals(8, itemCache.get(PUB).items().size());
         assertNull(itemCache.get(PUB).items().get(3).description());

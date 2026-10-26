@@ -115,6 +115,40 @@ class UserEndpointsTest {
         assertEquals(1, dbLogins.get());
     }
 
+    private JsonNode startExpedition(String priv, String cost) throws Exception {
+        JsonNode params = mapper.readTree("{\"user\":\"" + PUB + "\",\"private_key\":\"" + priv + "\""
+                + (cost == null ? "" : ",\"cost\":" + cost) + "}");
+        return mapper.valueToTree(endpoints.startExpedition().handle(params).await().indefinitely());
+    }
+
+    @Test
+    void startExpeditionDebitsTheCachedSession() throws Exception {
+        login(PUB, PRIV);
+        JsonNode r = startExpedition(PRIV, "1500");
+        assertEquals(200, r.get("status").asInt());
+        assertEquals(98500, r.at("/payload/money").asInt());
+        assertEquals(98500, store.get(PUB).user().money());
+        assertTrue(store.get(PUB).dirty(), "the debit must be written by the next synchronization");
+    }
+
+    @Test
+    void startExpeditionRefusesWhenTooPoor() throws Exception {
+        login(PUB, PRIV);
+        JsonNode r = startExpedition(PRIV, "100001");
+        assertEquals(402, r.get("status").asInt());
+        assertEquals(100000, r.at("/payload/money").asInt());
+        assertEquals(100000, store.get(PUB).user().money());
+        assertFalse(store.get(PUB).dirty());
+    }
+
+    @Test
+    void startExpeditionChecksKeyAndCost() throws Exception {
+        assertEquals(401, startExpedition("bad", "10").get("status").asInt());
+        assertEquals(400, startExpedition(PRIV, null).get("status").asInt());
+        assertEquals(400, startExpedition(PRIV, "0").get("status").asInt());
+        assertEquals(400, startExpedition(PRIV, "\"10\"").get("status").asInt());
+    }
+
     @Test
     void wrongKeyIsUnauthorized() throws Exception {
         assertEquals(401, login(PUB, "bad").get("status").asInt());

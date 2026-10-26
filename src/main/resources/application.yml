@@ -7,6 +7,9 @@ engine:
   items:
     cache-ttl-seconds: 300
     unknown-user-ttl-seconds: 60
+    # number of item sprites in the Unity client (ItemManager.sprites in the MainMenu scene);
+    # generated items get a graphics id in [0, graphics-count)
+    graphics-count: 181
   sync:
     # how often the scheduler looks at the logged users
     check-interval: 30s

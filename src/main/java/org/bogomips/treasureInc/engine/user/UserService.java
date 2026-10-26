@@ -94,6 +94,23 @@ public class UserService {
     }
 
     /**
+     * Takes {@code amount} from the user's balance, under the user's lock. Only the cached session is debited: the
+     * next synchronization writes the balance to the database. Nothing is taken when the balance is too low.
+     */
+    public Uni<SpendResult> spend(String publicKey, String privateKey, int amount) {
+        return lock.withLock(publicKey, () -> openSession(publicKey, privateKey).flatMap(user -> {
+            if (user == null) {
+                return Uni.createFrom().item(new SpendResult(SpendResult.Status.UNAUTHORIZED, 0));
+            }
+            if (user.money() < amount) {
+                return Uni.createFrom().item(new SpendResult(SpendResult.Status.NOT_ENOUGH_MONEY, user.money()));
+            }
+            return credit(publicKey, -amount, true)
+                    .map(updated -> new SpendResult(SpendResult.Status.OK, updated.money()));
+        }));
+    }
+
+    /**
      * Refreshes the cached session if the key matches; on a cache miss, asks {@code fromDatabase} (login or plain
      * authentication) and caches the user it returns. Emits null when the credentials are wrong.
      */
@@ -136,6 +153,12 @@ public class UserService {
 
     /** A freshly created user together with its private key, which is only ever available at creation. */
     public record CreatedUser(UserInfo user, String privateKey) {
+    }
+
+    /** Outcome of {@link #spend}; money is the balance afterwards (unchanged unless OK). */
+    public record SpendResult(Status status, int money) {
+
+        public enum Status { OK, UNAUTHORIZED, NOT_ENOUGH_MONEY }
     }
 
     /**

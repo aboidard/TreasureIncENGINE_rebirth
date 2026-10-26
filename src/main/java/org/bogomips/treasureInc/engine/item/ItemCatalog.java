@@ -179,17 +179,23 @@ class ItemCatalog {
             "Ça pourrait être utile un jour, peut-être.");
 
     private final RandomGenerator random;
+    private final int graphicsCount;
 
-    ItemCatalog(RandomGenerator random) {
+    /** @param graphicsCount number of item sprites in the client; generated graphics ids are in [0, graphicsCount) */
+    ItemCatalog(RandomGenerator random, int graphicsCount) {
+        if (graphicsCount < 1) {
+            throw new IllegalArgumentException("graphicsCount must be at least 1, got " + graphicsCount);
+        }
         this.random = random;
+        this.graphicsCount = graphicsCount;
     }
 
     public ItemInfo generate(int id) {
         Rarity rarity = Rarity.fromRoll(random.nextInt(1000) + 1);
         int price = (random.nextInt(1000) + 1000) * rarity.coef();
         String now = Instant.now().toString();
-        return new ItemInfo(id, itemName(rarity, random), null, null, price, rarity.value(), now, now,
-                randomDescriptionId(rarity, random));
+        return new ItemInfo(id, itemName(rarity, random), null, random.nextInt(graphicsCount), price, rarity.value(),
+                now, now, randomDescriptionId(rarity, random));
     }
 
     /** Text for a stored description id; null if the id is unknown. */
