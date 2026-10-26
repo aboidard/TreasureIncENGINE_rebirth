@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @QuarkusTest
 class RequestDispatcherTest {
@@ -25,13 +26,14 @@ class RequestDispatcherTest {
         JsonNode out = mapper.readTree(dispatcher.dispatch(in).await().indefinitely().json());
         assertEquals("abc", out.get("replyId").asText());
         assertEquals("UP", out.at("/payload/status").asText());
+        assertTrue(out.at("/payload/checks").isArray());
         assertEquals("alive", out.at("/payload/name").asText());
     }
 
     @Test
     void everyRequestTypeIsRegistered() {
         assertEquals(Set.of("healthcheck", "getItems", "getPrivateItems", "generateItemsForUser", "sellItems",
-                "createUser", "login"), dispatcher.knownTypes());
+                "createUser", "login", "startExpedition"), dispatcher.knownTypes());
     }
 
     @Test

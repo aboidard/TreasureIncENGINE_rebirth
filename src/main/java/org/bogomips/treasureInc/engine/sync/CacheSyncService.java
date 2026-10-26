@@ -13,10 +13,7 @@ import org.jboss.logging.Logger;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -122,50 +119,41 @@ public class CacheSyncService {
                                 publicKey, money, inserted)));
     }
 
-    /** Inserts the Redis-only (negative id) items and gives them their database ids in the Redis list. */
+    /** Inserts the pending items with the ids they already have, so the client's ids stay valid. */
     private Uni<Integer> syncItems(String publicKey, int userId) {
         return itemCache.get(publicKey).flatMap(list -> {
-            if (list == null || !list.userFound()) {
+            if (list == null || !list.userFound() || list.pendingIds().isEmpty()) {
                 return Uni.createFrom().item(0);
             }
-            List<ItemInfo> local = list.items().stream().filter(i -> i.id() < 0).toList();
-            if (local.isEmpty()) {
-                return Uni.createFrom().item(0);
-            }
-            return itemRepository.insertAll(userId, local).flatMap(newIds -> {
-                Map<Integer, Integer> idMap = new HashMap<>();
-                for (int i = 0; i < local.size(); i++) {
-                    idMap.put(local.get(i).id(), newIds.get(i));
-                }
-                return remap(publicKey, userId, idMap).replaceWith(local.size());
-            });
+            List<ItemInfo> pending = list.items().stream().filter(i -> list.pendingIds().contains(i.id())).toList();
+            Set<Integer> ids = pending.stream().map(ItemInfo::id).collect(Collectors.toSet());
+            return itemRepository.insertAll(userId, pending)
+                    .flatMap(v -> markInserted(publicKey, userId, ids))
+                    .replaceWith(pending.size());
         });
     }
 
     /**
-     * Re-reads the list: items that vanished meanwhile (e.g. the lock expired) are removed from the database
-     * again, the others get their new id.
+     * Re-reads the list: the inserted items are no longer pending, and those that vanished meanwhile (e.g. sold
+     * after the lock expired) are removed from the database again.
      */
-    private Uni<Void> remap(String publicKey, int userId, Map<Integer, Integer> idMap) {
+    private Uni<Void> markInserted(String publicKey, int userId, Set<Integer> inserted) {
         return itemCache.get(publicKey).flatMap(fresh -> {
-            List<ItemInfo> items = fresh == null ? List.of() : fresh.items();
-            Set<Integer> stillThere = new HashSet<>();
-            List<ItemInfo> updated = items.stream().map(i -> {
-                Integer newId = idMap.get(i.id());
-                if (newId == null) {
-                    return i;
-                }
-                stillThere.add(i.id());
-                return new ItemInfo(newId, i.name(), i.resolvedDescription(), i.graphics(), i.price(), i.rarity(),
-                        i.createdAt(), i.updatedAt());
-            }).toList();
-            List<Integer> sold = idMap.entrySet().stream()
-                    .filter(e -> !stillThere.contains(e.getKey())).map(Map.Entry::getValue).toList();
-            Uni<Void> write = fresh == null ? Uni.createFrom().voidItem()
-                    : itemCache.put(publicKey, new ItemList(true, updated));
+            if (fresh == null) {
+                return itemRepository.deleteByIds(userId, List.copyOf(inserted));
+            }
+            Set<Integer> stillThere = fresh.items().stream().map(ItemInfo::id).filter(inserted::contains)
+                    .collect(Collectors.toSet());
+            List<Integer> sold = inserted.stream().filter(id -> !stillThere.contains(id)).toList();
+            Set<Integer> pending = fresh.pendingIds().stream().filter(id -> !inserted.contains(id))
+                    .collect(Collectors.toSet());
+            ItemList updated = new ItemList(true, fresh.items(), pending);
+            // the list may expire again once nothing in it is missing from the database
+            Uni<Void> write = pending.isEmpty() ? itemCache.put(publicKey, updated) : itemCache.persist(publicKey, updated);
             return write.flatMap(v -> itemRepository.deleteByIds(userId, sold));
         });
     }
+
 
     /** Stays dirty if the balance moved while we were writing (only possible if the lock expired). */
     private Uni<Void> markSynced(String publicKey, int syncedMoney) {

@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.random.RandomGenerator;
 
 /**
- * Creates random items from the text catalogues (items and expeditions) and the rarity table.
+ * Creates random items from the item text catalogues and the rarity table.
  * A generated item keeps its description as an id: its index in the rarity's list, as stored in Redis,
  * so only ever append to those lists.
  */
@@ -55,17 +55,6 @@ class ItemCatalog {
     }
 
     private static final String FEMININE = "F";
-
-    private static final List<String> EXPEDITION = List.of(
-            "Expédition,F,l'", "Aventure,F,l'", "Baroud,M,le", "Errance,F,l'", "Épisode,M,l'", "Épreuve,F,l'",
-            "Péripétie,F,la", "Imprudence,F,l'", "Conquête,F,la", "Rencontre,F,la", "Mésaventure,F,la",
-            "Équipée,F,l'", "Destin,M,le", "Entreprise,F,l'", "Odyssée,F,l'", "Évenement,M,l'");
-
-    private static final List<String> EXPEDITION_ADJECTIVE = List.of(
-            "douloureux,douloureuse", "incroyable", "fructueux,fructueuse", "enrichissant,enrichissante",
-            "rémunérateur,rémunératrice", "lucratif,lucrative", "rentable", "salutaire", "fertile",
-            "productif,productive", "intéressant,intéressante", "productif,productive", "juteux,juteuse",
-            "fécond,féconde", "intarissable", "généreux,généreuse");
 
     private static final List<String> COMMON_ITEM = List.of(
             "babiole,F,la", "breloque,F,la", "bibelot,M,le", "broutille,F,la", "bijou,M,le", "porte-bonheur,M,le",
@@ -179,29 +168,29 @@ class ItemCatalog {
             "Ça pourrait être utile un jour, peut-être.");
 
     private final RandomGenerator random;
+    private final int graphicsCount;
 
-    ItemCatalog(RandomGenerator random) {
+    /** @param graphicsCount number of item sprites in the client; generated graphics ids are in [0, graphicsCount) */
+    ItemCatalog(RandomGenerator random, int graphicsCount) {
+        if (graphicsCount < 1) {
+            throw new IllegalArgumentException("graphicsCount must be at least 1, got " + graphicsCount);
+        }
         this.random = random;
+        this.graphicsCount = graphicsCount;
     }
 
     public ItemInfo generate(int id) {
         Rarity rarity = Rarity.fromRoll(random.nextInt(1000) + 1);
         int price = (random.nextInt(1000) + 1000) * rarity.coef();
         String now = Instant.now().toString();
-        return new ItemInfo(id, itemName(rarity, random), null, null, price, rarity.value(), now, now,
-                randomDescriptionId(rarity, random));
+        return new ItemInfo(id, itemName(rarity, random), null, random.nextInt(graphicsCount), price, rarity.value(),
+                now, now, randomDescriptionId(rarity, random));
     }
 
     /** Text for a stored description id; null if the id is unknown. */
     public static String description(Rarity rarity, Integer id) {
         List<String> list = descriptions(rarity);
         return id == null || id < 0 || id >= list.size() ? null : list.get(id);
-    }
-
-    public static String expeditionName(RandomGenerator random) {
-        String[] ex = pick(EXPEDITION, random).split(",");
-        String[] adj = pick(EXPEDITION_ADJECTIVE, random).split(",");
-        return ex[0] + " " + agree(adj, FEMININE.equals(ex[1]));
     }
 
     private static String itemName(Rarity rarity, RandomGenerator random) {

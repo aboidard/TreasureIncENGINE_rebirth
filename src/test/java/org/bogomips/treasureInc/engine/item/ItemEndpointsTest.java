@@ -21,6 +21,8 @@ class ItemEndpointsTest {
 
     private static final String PUB = "12345678900";
     private static final String PRIV = "secret";
+    private static final int GRAPHICS_COUNT = 7;
+    private static final int ID_BLOCK_SIZE = 4;
 
     private final ObjectMapper mapper = new ObjectMapper();
     private final AtomicInteger dbReads = new AtomicInteger();
@@ -33,7 +35,10 @@ class ItemEndpointsTest {
             new ItemInfo(3, "c", "d", 3, 50, "common", "t", "t")));
     private int dbMoney = 1000;
     private int syncedMoney = -1;
-    private int nextId = 0;
+    // the database sequence: database items above use ids 1..3
+    private int dbSequence = 100;
+    private final List<Integer> nextIdsCalls = new ArrayList<>();
+    private final Deque<Integer> idPool = new ArrayDeque<>();
 
     private final ItemService.Repository itemRepo = new ItemService.Repository() {
         public Uni<ItemList> findByPublicKey(String pk) {
@@ -41,14 +46,20 @@ class ItemEndpointsTest {
             return Uni.createFrom().item(PUB.equals(pk) ? new ItemList(true, List.copyOf(dbItems)) : ItemList.unknownUser());
         }
 
-        public Uni<List<Integer>> insertAll(int userId, List<ItemInfo> items) {
+        public Uni<List<Integer>> nextIds(int count) {
+            nextIdsCalls.add(count);
             List<Integer> ids = new ArrayList<>();
-            for (ItemInfo i : items) {
-                int id = 100 + dbItems.size() + 1;
-                ids.add(id);
-                dbItems.add(new ItemInfo(id, i.name(), i.resolvedDescription(), i.graphics(), i.price(), i.rarity(), "t", "t"));
+            for (int i = 0; i < count; i++) {
+                ids.add(++dbSequence);
             }
             return Uni.createFrom().item(ids);
+        }
+
+        public Uni<Void> insertAll(int userId, List<ItemInfo> items) {
+            for (ItemInfo i : items) {
+                dbItems.add(new ItemInfo(i.id(), i.name(), i.resolvedDescription(), i.graphics(), i.price(), i.rarity(), "t", "t"));
+            }
+            return Uni.createFrom().voidItem();
         }
 
         public Uni<Void> deleteByIds(int userId, List<Integer> ids) {
@@ -87,9 +98,17 @@ class ItemEndpointsTest {
             return Uni.createFrom().voidItem();
         }
 
-        public Uni<Integer> reserveIds(int count) {
-            nextId -= count;
-            return Uni.createFrom().item(nextId);
+        public Uni<List<Integer>> takeIds(int count) {
+            List<Integer> ids = new ArrayList<>();
+            while (ids.size() < count && !idPool.isEmpty()) {
+                ids.add(idPool.poll());
+            }
+            return Uni.createFrom().item(ids);
+        }
+
+        public Uni<Void> addIds(List<Integer> ids) {
+            idPool.addAll(ids);
+            return Uni.createFrom().voidItem();
         }
 
         public Uni<Void> evict(String k) {
@@ -100,7 +119,8 @@ class ItemEndpointsTest {
         public Uni<Void> removeIds(String pk, Collection<Integer> ids) {
             ItemList l = itemCache.get(pk);
             if (l != null) {
-                itemCache.put(pk, new ItemList(l.userFound(), l.items().stream().filter(i -> !ids.contains(i.id())).toList()));
+                itemCache.put(pk, new ItemList(l.userFound(), l.items().stream().filter(i -> !ids.contains(i.id())).toList(),
+                        l.pendingIds().stream().filter(id -> !ids.contains(id)).collect(java.util.stream.Collectors.toSet())));
             }
             return Uni.createFrom().voidItem();
         }
@@ -159,7 +179,7 @@ class ItemEndpointsTest {
         }
     };
     private final UserService userService = new UserService(userRepo, userCache, lock, 10000);
-    private final ItemService service = new ItemService(itemRepo, cache, userService, lock);
+    private final ItemService service = new ItemService(itemRepo, cache, userService, lock, GRAPHICS_COUNT, ID_BLOCK_SIZE);
     private final ItemEndpoints endpoints = new ItemEndpoints(service, userService);
 
     private JsonNode call(RequestHandler h, String json) throws Exception {
@@ -207,11 +227,14 @@ class ItemEndpointsTest {
         assertEquals(200, r.get("status").asInt());
         assertEquals(5, r.at("/payload/items").size());
         for (JsonNode i : r.at("/payload/items")) {
-            assertTrue(i.get("id").asInt() < 0);
+            assertTrue(i.get("id").asInt() > 100, "id from the database sequence");
             assertTrue(i.get("description").isTextual());
             assertFalse(i.get("name").asText().isBlank());
+            int graphics = i.get("graphics").asInt(-1);
+            assertTrue(i.get("graphics").isInt() && graphics >= 0 && graphics < GRAPHICS_COUNT, "graphics " + i.get("graphics"));
         }
         assertEquals(8, itemCache.get(PUB).items().size());
+        assertEquals(Set.of(101, 102, 103, 104, 105), itemCache.get(PUB).pendingIds());
         assertNull(itemCache.get(PUB).items().get(3).description());
         assertNotNull(itemCache.get(PUB).items().get(3).descriptionId());
         assertEquals(3, dbItems.size());
@@ -245,12 +268,57 @@ class ItemEndpointsTest {
         assertEquals(1, sync.syncDue(java.time.Instant.now().plusSeconds(181)).await().indefinitely());
         assertEquals(1000 + soldPrice, syncedMoney);
         assertFalse(users.get(PUB).dirty());
-        assertEquals(1, itemCache.get(PUB).items().stream().filter(i -> i.id() > 100).count());
-        assertTrue(itemCache.get(PUB).items().stream().noneMatch(i -> i.id() < 0));
-        assertNotEquals(id1, itemCache.get(PUB).items().get(3).id());
+        // the unsold item is inserted with its id, which does not change; the sold one never reaches the database
+        assertEquals(id1, itemCache.get(PUB).items().get(3).id());
+        assertTrue(itemCache.get(PUB).pendingIds().isEmpty());
+        assertTrue(dbItems.stream().anyMatch(i -> i.id() == id1));
+        assertTrue(dbItems.stream().noneMatch(i -> i.id() == id2));
 
         // nothing pending anymore
         assertEquals(0, sync.syncDue(java.time.Instant.now().plusSeconds(1000)).await().indefinitely());
+    }
+
+    @Test
+    void anItemCanBeSoldWithItsGenerationIdAfterTheSync() throws Exception {
+        String justNow = java.time.Instant.now().toString();
+        users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), justNow, CachedSession.hashKey(PRIV)));
+        JsonNode gen = call(endpoints.generateItemsForUser(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":1}");
+        int id = gen.at("/payload/items/0/id").asInt();
+        CacheSyncService sync = new CacheSyncService(userCache, cache, userRepo, itemRepo, lock,
+                java.time.Duration.ofMinutes(3), java.time.Duration.ofHours(1));
+        assertEquals(1, sync.syncDue(java.time.Instant.now().plusSeconds(181)).await().indefinitely());
+
+        // the client never heard of the sync and still uses the id it got at generation
+        JsonNode r = call(endpoints.sellItems(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"items\":[{\"id\":" + id + "}]}");
+        assertEquals(200, r.get("status").asInt());
+        assertEquals(1, dbSells.get(), "the item is in the database now, so the sale goes through it");
+        assertTrue(dbItems.stream().noneMatch(i -> i.id() == id));
+    }
+
+    @Test
+    void idsAreReservedFromTheDatabaseByBlock() throws Exception {
+        users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", CachedSession.hashKey(PRIV)));
+        RequestHandler gen = endpoints.generateItemsForUser();
+        String request = "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":%d}";
+
+        call(gen, request.formatted(3));
+        assertEquals(List.of(ID_BLOCK_SIZE), nextIdsCalls, "a first block is reserved");
+        assertEquals(List.of(104), List.copyOf(idPool), "what is not used now stays in the pool");
+
+        call(gen, request.formatted(1));
+        assertEquals(1, nextIdsCalls.size(), "served from the pool, no database call");
+
+        call(gen, request.formatted(2));
+        assertEquals(List.of(ID_BLOCK_SIZE, ID_BLOCK_SIZE), nextIdsCalls, "pool empty: a new block");
+
+        // 2 ids left in the pool, 9 needed: the 7 missing ones are reserved at once, more than a block
+        call(gen, request.formatted(9));
+        assertEquals(List.of(ID_BLOCK_SIZE, ID_BLOCK_SIZE, 7), nextIdsCalls);
+        assertTrue(idPool.isEmpty());
+
+        List<Integer> ids = itemCache.get(PUB).items().stream().map(ItemInfo::id).filter(i -> i > 100).toList();
+        assertEquals(15, ids.size());
+        assertEquals(15, Set.copyOf(ids).size(), "every id is unique");
     }
 
     @Test

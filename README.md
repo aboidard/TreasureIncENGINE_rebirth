@@ -42,10 +42,28 @@ Côté moteur, la chaîne de traitement est :
 2. **Dispatcher** — indépendant du transport : il valide l'enveloppe, route vers le bon handler et construit la réponse.
 3. **Handlers** — un bean CDI par type de requête. Ajouter une fonctionnalité revient à ajouter un handler, sans toucher au reste.
 
+Types de requête (`payload.type`) et paramètres (`payload.params`) :
+
+| Type | Paramètres | Réponse (`payload`) |
+|---|---|---|
+| `createUser` | — | 201 `{user}` (clé privée renvoyée une seule fois) |
+| `login` | `user`, `private_key` | 200 `{user}` · 401 |
+| `getItems` | `user`, `page` (dès 1), `limit` (≤ 100) | 200 `{items, page, limit, total}` · 404 |
+| `getPrivateItems` | idem + `private_key` | idem · 401 |
+| `generateItemsForUser` | `user`, `private_key`, `nb` (≤ 100) | 200 `{items}` · 401 |
+| `sellItems` | `user`, `private_key`, `items: [{id}]` | 200 `{totalPrice, money}` · 401 · 404 |
+| `startExpedition` | `user`, `private_key`, `cost` (≥ 1) | 200 `{money}` · 401 · 402 `{money}` |
+| `healthcheck` | — | `{name, status, data, checks: [{name, status}]}` (checks de readiness : base, Redis) |
+
+Un paramètre manquant ou invalide renvoie 400.
+
 ### Cache « write-behind »
 L'état chaud des sessions de jeu (solde, inventaire) vit dans **Redis** pour des temps de réponse très faibles.
 Un **job planifié** (Quarkus Scheduler) écrit périodiquement en base les sessions modifiées, puis évince les sessions inactives.
 Le compromis est assumé : peu d'écritures en base pendant le jeu, et une fenêtre de resynchronisation bornée et configurable.
+
+Un objet généré reçoit tout de suite son **id définitif**, pris dans la séquence PostgreSQL `items_id_seq` : il ne change pas quand l'objet est écrit en base, et le client peut le vendre avant comme après la synchronisation.
+Pour ne pas solliciter la base à chaque génération, les ids sont réservés **par blocs** (`engine.items.id-block-size`, 100 par défaut) en un seul appel (`nextval` sur un `generate_series`) ; ceux qui ne servent pas tout de suite attendent dans une liste Redis partagée par toutes les instances.
 
 ### Cohérence et concurrence
 - **Verrou distribué par joueur** sur Redis (acquisition atomique, libération réservée au propriétaire, expiration de sécurité) : les actions d'un même joueur sont sérialisées, même avec plusieurs instances du moteur.
@@ -70,6 +88,7 @@ src/main/java/.../engine
 ├── messaging   transport, dispatcher, contrat des handlers, format des réponses
 ├── user        joueurs : service, cache, verrou, persistance, handlers
 ├── item        objets : génération, cache, persistance, handlers
+├── expedition  expéditions : handlers, noms générés
 └── sync        synchronisation planifiée cache → base de données
 ```
 
