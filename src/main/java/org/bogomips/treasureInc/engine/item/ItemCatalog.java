@@ -91,14 +91,20 @@ class ItemCatalog {
             "Il attire l'attention par sa singularité.",
             "On ne voit pas souvent ce genre d'objet.",
             "Il a quelque chose de spécial.",
-            "Pas commun, mais pas extraordinaire non plus.");
+            "Pas commun, mais pas extraordinaire non plus.",
+            "Mon beau-frère jure qu'il en a vu un pareil, mais il dit ça de tout.",
+            "Il fait un petit bruit de hamster quand on le secoue.",
+            "Ni bon, ni mauvais : juste suspect.");
 
     private static final List<String> RARE_DESCRIPTION = List.of(
             "Un objet rare et précieux.",
             "Il se distingue par sa qualité exceptionnelle.",
             "Peu d'exemplaires existent dans le monde.",
             "Il est recherché par les collectionneurs.",
-            "Sa rareté en fait un objet de valeur.");
+            "Sa rareté en fait un objet de valeur.",
+            "Un expert l'a regardé longuement avant de dire « hmm ».",
+            "Il brille tellement que les pies font la queue devant ma fenêtre.",
+            "Certifié authentique par un monsieur très sûr de lui.");
 
     private static final List<String> EPIC_DESCRIPTION = List.of(
             "Un objet épique digne des légendes.",
@@ -108,7 +114,10 @@ class ItemCatalog {
             "C'est une de mes plus belle pièce...",
             "Incroyable, mais vrai !",
             "J'ai dépeché un de mes meilleurs hommes pour aller chercher ça !",
-            "Un véritable chef-d'œuvre.");
+            "Un véritable chef-d'œuvre.",
+            "Les dragons eux-mêmes demandent à le voir en vitrine.",
+            "Il a survécu à trois déménagements et une belle-mère.",
+            "Si vous l'astiquez, une petite musique d'ascenseur épique se déclenche.");
 
     private static final List<String> LEGENDARY_DESCRIPTION = List.of(
             "Un objet légendaire, unique en son genre.",
@@ -118,7 +127,10 @@ class ItemCatalog {
             "Sa place est dans un musée !",
             "Un certain professeur Johanes l'a cherché toute sa vie.",
             "Nulle part dans le monde on ne trouve de tel objet.",
-            "Un trésor inestimable.");
+            "Un trésor inestimable.",
+            "Les bardes ont renoncé à rimer avec son nom.",
+            "Il a été signé par Dieu, enfin je crois, l'écriture est illisible.",
+            "On raconte qu'il fait automatiquement gagner aux jeux de société. On raconte.");
 
     private static final List<String> COMMON_DESCRIPTION = List.of(
             "Objet bien mais pas top, il aurait été inventé il y a longtemps avant JC.",
@@ -165,7 +177,14 @@ class ItemCatalog {
             "Est-ce que quelqu'un peut m'expliquer à quoi ça sert ?",
             "Je parie que ça ne sert à rien.",
             "C'est juste pour le style.",
-            "Ça pourrait être utile un jour, peut-être.");
+            "Ça pourrait être utile un jour, peut-être.",
+            "Il y a une inscription : 'ne pas donner à manger après minuit'",
+            "Il y a une inscription : 'garder hors de portée des enfants et des huissiers'",
+            "Ça sent le fond de tiroir et la nostalgie.",
+            "Mon chat l'a renversé de la table trois fois, donc il est solide.",
+            "Il y a un post-it : 'à jeter, mais pas tout de suite'.",
+            "Garanti 2 ans, mais le magasin a fermé il y a 10 ans.",
+            "Il manque la notice. Et le reste, aussi.");
 
     private final RandomGenerator random;
     private final int graphicsCount;
