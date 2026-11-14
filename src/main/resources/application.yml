@@ -13,6 +13,13 @@ engine:
     # how many item ids are reserved at once from the database sequence (items_id_seq): generated items get their
     # final id right away; the unused ones wait in Redis (treasure_inc.items_id_pool) for the next generations
     id-block-size: 100
+    # chance, in percent, that a generated item is an equipment (an item with stats, see Equipment)
+    equipable-chance: 5
+  characters:
+    # how many characters a user has (the crew of TeamPanel in the Unity client)
+    count: 3
+    # how long the characters read from the database stay in Redis; no expiry while a change waits for the sync
+    cache-ttl-seconds: 300
   expeditions:
     # number of cases of a location's grid in the Unity client (SendExpeditionPanel.CreateGridLocation)
     grid-size: 18
@@ -53,6 +60,11 @@ quarkus:
   hibernate-orm:
     schema-management:
       strategy: none
+    mapping:
+      format:
+        # the jsonb columns (items.stats, characters.equipment) use the JSON mapper of Hibernate,
+        # not the one of the REST layer
+        global: ignore
 "%dev":
   quarkus:
     log:

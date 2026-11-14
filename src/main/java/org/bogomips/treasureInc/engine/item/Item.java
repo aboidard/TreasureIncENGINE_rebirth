@@ -6,8 +6,12 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.Map;
 
 @Entity
 @Table(name = "items", schema = "public")
@@ -36,8 +40,12 @@ public class Item extends PanacheEntityBase {
     @Column(name = "updatedat")
     public LocalDateTime updatedAt;
 
+    /** Null unless the item is equipable; see {@link Equipment} for the content. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    public Map<String, Object> stats;
+
     public ItemInfo toInfo() {
-        return new ItemInfo(id, name, description, graphics, price, rarity, iso(createdAt), iso(updatedAt));
+        return new ItemInfo(id, name, description, graphics, price, rarity, iso(createdAt), iso(updatedAt), null, stats);
     }
 
     private static String iso(LocalDateTime t) {

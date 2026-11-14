@@ -51,15 +51,18 @@ Types de requête (`payload.type`) et paramètres (`payload.params`) :
 | `getItems` | `user`, `page` (dès 1), `limit` (≤ 100) | 200 `{items, page, limit, total}` · 404 |
 | `getPrivateItems` | idem + `private_key` | idem · 401 |
 | `sellItems` | `user`, `private_key`, `items: [{id}]` | 200 `{totalPrice, money}` · 401 · 404 |
-| `digCase` | `user`, `private_key`, `location`, `case_id`, `cost` (≥ 0) | 200 `{rarity, money}` · 401 · 402 `{money}` |
-| `startExpedition` | `user`, `private_key`, `location`, `difficulty`, `case_id` (optionnel) | 200 `{expeditionId, money, itemCount}` · 401 · 402 `{money}` |
+| `digCase` | `user`, `private_key`, `location`, `case_id`, `cost` (≥ 0) | 200 `{rarity, money}` · 401 · 402 `{money}` · 409 (plus aucun personnage disponible) |
+| `startExpedition` | `user`, `private_key`, `location`, `difficulty`, `character`, `case_id` (optionnel) | 200 `{expeditionId, character, money, itemCount}` · 401 · 402 `{money}` · 409 (personnage déjà en expédition) |
 | `generateItemsForUser` | `user`, `private_key`, `expedition_id` | 200 `{items}` · 401 · 404 |
+| `getCharacters` | `user`, `private_key` | 200 `{characters}` · 401 |
+| `equipItem` | `user`, `private_key`, `character`, `slot`, `item` | 200 `{characters}` · 400 (mauvais slot) · 401 · 404 · 409 (personnage en expédition) |
+| `unequipItem` | `user`, `private_key`, `character`, `slot` | 200 `{characters}` · 401 · 409 |
 | `healthcheck` | — | `{name, status, data, checks: [{name, status}]}` (checks de readiness : base, Redis) |
 
 Un paramètre manquant ou invalide renvoie 400.
 
 ### Cache « write-behind »
-L'état chaud des sessions de jeu (solde, inventaire) vit dans **Redis** pour des temps de réponse très faibles.
+L'état chaud des sessions de jeu (solde, inventaire, équipement des personnages) vit dans **Redis** pour des temps de réponse très faibles.
 Un **job planifié** (Quarkus Scheduler) écrit périodiquement en base les sessions modifiées, puis évince les sessions inactives.
 Le compromis est assumé : peu d'écritures en base pendant le jeu, et une fenêtre de resynchronisation bornée et configurable.
 
@@ -89,6 +92,66 @@ Les lieux et leur niveau se déclarent dans `engine.expeditions.locations` : ajo
 n = min(15, max(1, round(étages × (0,5 + 0,25 × niveau) × (1 + 0,25 × rareté))))
 ```
 
+### Équipements et personnages
+
+**Objets équipables.** Chaque objet généré a `engine.items.equipable-chance` % de chance (5 par défaut) d'être un équipement.
+Ses caractéristiques tiennent dans un seul champ JSON, la colonne `items.stats` (`jsonb`, `NULL` pour un objet ordinaire) :
+
+```json
+{ "slot": 3, "for": 5, "luk": 2, "spe1": "breakable", "spe2": "luck_charm" }
+```
+
+| Clé | Sens |
+|---|---|
+| `slot` | numéro de l'emplacement où l'objet s'équipe (tableau ci-dessous) |
+| `for`, `con`, `luk` | force, constitution et chance ajoutées au personnage |
+| `spe1`, `spe2`… | identifiants de compétences définies dans le moteur (`Equipment.Skill`) |
+
+Le client ne reçoit que l'identifiant d'une compétence : il affiche sa propre description.
+
+| Compétence | Effet |
+|---|---|
+| `breakable` | l'objet peut casser — définie et affichée, mais rien ne casse encore un objet |
+| `luck_charm` | à l'ouverture du coffre, chaque objet porté par le personnage de l'expédition a 25 % de chance d'ajouter un objet |
+
+La force, la constitution et la chance sont stockées et affichées ; elles n'ont pas encore d'effet en jeu.
+
+**Emplacements.** Les numéros sont stockés en base et connus du client : ils ne changent jamais.
+
+| N° | Emplacement | Objets | Caractéristique |
+|---|---|---|---|
+| 1 | Tête | casques | constitution |
+| 2 | Armure | armures | constitution |
+| 3 | Arme | épées | force |
+| 4 | Bouclier | boucliers | constitution |
+| 5 | Bottes | bottes | constitution |
+| 6 | Gants | gants | force |
+| 7 | Anneau | anneaux | chance |
+| 8 | Amulette | amulettes | chance |
+| 9 | Talisman | talismans | chance |
+
+Un équipement reçoit le nom et un des sprites de sa famille (`Equipment.Kind`). La valeur de sa caractéristique dépend de sa rareté :
+commun 1-5, peu commun 4-10, rare 8-18, épique 15-30, légendaire 30-50.
+
+**Personnages.** Chaque joueur possède `engine.characters.count` personnages (3), numérotés à partir de 1, dans la table `characters`
+(`user_id`, `num`, `equipment`). La colonne `equipment` (`jsonb`) ne contient que l'id de l'objet par numéro d'emplacement :
+
+```json
+{ "2": 812, "3": 640 }
+```
+
+- Un objet équipé reste un objet du joueur, mais il quitte l'inventaire : `getItems` ne le renvoie plus et `sellItems` le refuse.
+  Le retirer, ou équiper un autre objet au même emplacement, le remet dans l'inventaire.
+- Comme pour le reste, toute modification est faite dans Redis (`treasure_inc.characters.<publicKey>`) sous le verrou du joueur ;
+  la synchronisation l'écrit en base plus tard.
+- `getCharacters`, `equipItem` et `unequipItem` répondent avec tous les personnages :
+  `[{num, expeditionId, equipment: {"<slot>": {objet}}}]`.
+
+**Personnages et expéditions.** Une expédition est menée par un personnage (`character`), indisponible jusqu'à l'ouverture de son coffre :
+il ne peut ni mener une autre expédition ni changer d'équipement (409). Quand tous les personnages sont partis, plus rien ne peut être creusé ni envoyé.
+
+Le schéma se met à jour avec `src/main/resources/db/update_001_equipment.sql`.
+
 ### Observabilité
 - Logs structurés `clé=valeur` (lisibles et exploitables dans Kibana), JSON en production, **masquage automatique** des champs sensibles et troncature des charges volumineuses.
 - Métriques **Prometheus** (Micrometer) et sondes de santé **SmallRye Health**.
@@ -99,7 +162,8 @@ n = min(15, max(1, round(étages × (0,5 + 0,25 × niveau) × (1 + 0,25 × raret
 src/main/java/.../engine
 ├── messaging   transport, dispatcher, contrat des handlers, format des réponses
 ├── user        joueurs : service, cache, verrou, persistance, handlers
-├── item        objets : génération, cache, persistance, handlers
+├── item        objets : génération, équipements, cache, persistance, handlers
+├── character   personnages : équipement, cache, persistance, handlers
 ├── expedition  expéditions : creusage, envoi, coffres, règles, noms générés
 └── sync        synchronisation planifiée cache → base de données
 ```

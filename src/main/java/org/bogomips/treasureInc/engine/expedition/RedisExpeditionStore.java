@@ -7,7 +7,11 @@ import io.quarkus.redis.datasource.hash.ReactiveHashCommands;
 import io.quarkus.redis.datasource.keys.ReactiveKeyCommands;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
+import org.bogomips.treasureInc.engine.character.CharacterService;
 import org.bogomips.treasureInc.engine.expedition.ExpeditionService.Expedition;
+
+import java.util.List;
+import java.util.Map;
 
 /**
  * Per user: "treasure_inc.expeditions.&lt;publicKey&gt;" holds the expeditions by id (JSON), and
@@ -15,7 +19,7 @@ import org.bogomips.treasureInc.engine.expedition.ExpeditionService.Expedition;
  * Both expire, as a player who leaves the game never opens the chests of the expeditions under way.
  */
 @ApplicationScoped
-class RedisExpeditionStore implements ExpeditionService.Store {
+class RedisExpeditionStore implements ExpeditionService.Store, CharacterService.Activity {
 
     static final String EXPEDITIONS_PREFIX = "treasure_inc.expeditions.";
     static final String DIGS_PREFIX = "treasure_inc.digs.";
@@ -55,6 +59,17 @@ class RedisExpeditionStore implements ExpeditionService.Store {
     public Uni<Expedition> get(String publicKey, String expeditionId) {
         return hash.hget(expeditionsKey(publicKey), expeditionId)
                 .map(json -> json == null ? null : read(expeditionId, json));
+    }
+
+    @Override
+    public Uni<List<Expedition>> list(String publicKey) {
+        return hash.hgetall(expeditionsKey(publicKey))
+                .map(all -> all.entrySet().stream().map(e -> read(e.getKey(), e.getValue())).toList());
+    }
+
+    @Override
+    public Uni<Map<Integer, String>> expeditionsByCharacter(String publicKey) {
+        return list(publicKey).map(ExpeditionService::busyCharacters);
     }
 
     @Override
