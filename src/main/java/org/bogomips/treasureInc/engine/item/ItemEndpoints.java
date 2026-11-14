@@ -20,7 +20,6 @@ class ItemEndpoints {
 
     static final int DEFAULT_LIMIT = 20;
     static final int MAX_LIMIT = 100;
-    static final int MAX_GENERATED_ITEMS = 100;
     static final int MAX_SOLD_ITEMS = 1000;
 
     private final ItemService items;
@@ -41,11 +40,6 @@ class ItemEndpoints {
     @Produces
     RequestHandler getPrivateItems() {
         return RequestHandler.of("getPrivateItems", params -> list(params, this::ownsKey));
-    }
-
-    @Produces
-    RequestHandler generateItemsForUser() {
-        return RequestHandler.of("generateItemsForUser", this::generate);
     }
 
     @Produces
@@ -85,23 +79,6 @@ class ItemEndpoints {
             return Uni.createFrom().item(false);
         }
         return users.authenticate(publicKey, privateKey).map(u -> u != null);
-    }
-
-    private Uni<Object> generate(JsonNode params) {
-        String publicKey = Protocol.publicKey(params);
-        String privateKey = Protocol.text(params, "private_key");
-        Integer nb = Protocol.integer(params, "nb", 1);
-        if (publicKey == null || privateKey == null || nb == null || nb < 1 || nb > MAX_GENERATED_ITEMS) {
-            return Uni.createFrom().item(Protocol.badRequest());
-        }
-        return items.generate(publicKey, privateKey, nb).map(generated -> {
-            if (generated == null) {
-                return Protocol.unauthorized();
-            }
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("items", generated.stream().map(ItemInfo::toMap).toList());
-            return Protocol.reply(200, "OK", payload);
-        });
     }
 
     private Uni<Object> sell(JsonNode params) {

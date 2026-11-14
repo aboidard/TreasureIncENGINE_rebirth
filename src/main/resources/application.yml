@@ -13,6 +13,23 @@ engine:
     # how many item ids are reserved at once from the database sequence (items_id_seq): generated items get their
     # final id right away; the unused ones wait in Redis (treasure_inc.items_id_pool) for the next generations
     id-block-size: 100
+  expeditions:
+    # number of cases of a location's grid in the Unity client (SendExpeditionPanel.CreateGridLocation)
+    grid-size: 18
+    # highest number of floors (the slider of SendExpeditionPanel)
+    max-difficulty: 10
+    max-items: 15
+    # cost of an expedition = floors * cost-per-floor * location level
+    cost-per-floor: 100
+    # how long the dug cases of a location are remembered when no expedition is sent there
+    dig-ttl: 24h
+    # how long the unopened expeditions of a user are kept after the last one was sent
+    ttl: 7d
+    # adding a location: one line here (lowercase name) and a Location asset with this name in the Unity client
+    locations:
+      mordak: { level: 1 }
+      gardakan: { level: 2 }
+      bobafett: { level: 3 }
   sync:
     # how often the scheduler looks at the logged users
     check-interval: 30s

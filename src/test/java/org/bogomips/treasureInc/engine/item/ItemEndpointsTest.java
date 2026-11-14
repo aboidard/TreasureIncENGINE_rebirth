@@ -186,6 +186,12 @@ class ItemEndpointsTest {
         return mapper.valueToTree(h.handle(mapper.readTree(json)).await().indefinitely());
     }
 
+    /** Items as a chest gives them to the client, in the reply format of the other requests. */
+    private JsonNode generate(int count) {
+        List<ItemInfo> generated = service.generateLocked(PUB, PRIV, count).await().indefinitely();
+        return mapper.valueToTree(Map.of("payload", Map.of("items", generated.stream().map(ItemInfo::toMap).toList())));
+    }
+
     @Test
     void publicGetPagesAndUsesCache() throws Exception {
         RequestHandler h = endpoints.getItems();
@@ -218,13 +224,10 @@ class ItemEndpointsTest {
     }
 
     @Test
-    void generateStoresInRedisOnly() throws Exception {
-        RequestHandler h = endpoints.generateItemsForUser();
-        assertEquals(401, call(h, "{\"user\":\"" + PUB + "\",\"private_key\":\"bad\",\"nb\":2}").get("status").asInt());
-        assertEquals(400, call(h, "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":0}").get("status").asInt());
+    void generateStoresInRedisOnly() {
+        assertNull(service.generateLocked(PUB, "bad", 2).await().indefinitely());
 
-        JsonNode r = call(h, "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":5}");
-        assertEquals(200, r.get("status").asInt());
+        JsonNode r = generate(5);
         assertEquals(5, r.at("/payload/items").size());
         for (JsonNode i : r.at("/payload/items")) {
             assertTrue(i.get("id").asInt() > 100, "id from the database sequence");
@@ -252,7 +255,7 @@ class ItemEndpointsTest {
     @Test
     void syncWritesPendingChangesOncePastMaxAge() throws Exception {
         users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", CachedSession.hashKey(PRIV)));
-        JsonNode gen = call(endpoints.generateItemsForUser(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":2}");
+        JsonNode gen = generate(2);
         int id1 = gen.at("/payload/items/0/id").asInt();
         int id2 = gen.at("/payload/items/1/id").asInt();
         call(endpoints.sellItems(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"items\":[{\"id\":" + id2 + "}]}");
@@ -282,7 +285,7 @@ class ItemEndpointsTest {
     void anItemCanBeSoldWithItsGenerationIdAfterTheSync() throws Exception {
         String justNow = java.time.Instant.now().toString();
         users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), justNow, CachedSession.hashKey(PRIV)));
-        JsonNode gen = call(endpoints.generateItemsForUser(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":1}");
+        JsonNode gen = generate(1);
         int id = gen.at("/payload/items/0/id").asInt();
         CacheSyncService sync = new CacheSyncService(userCache, cache, userRepo, itemRepo, lock,
                 java.time.Duration.ofMinutes(3), java.time.Duration.ofHours(1));
@@ -296,23 +299,21 @@ class ItemEndpointsTest {
     }
 
     @Test
-    void idsAreReservedFromTheDatabaseByBlock() throws Exception {
+    void idsAreReservedFromTheDatabaseByBlock() {
         users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", CachedSession.hashKey(PRIV)));
-        RequestHandler gen = endpoints.generateItemsForUser();
-        String request = "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":%d}";
 
-        call(gen, request.formatted(3));
+        generate(3);
         assertEquals(List.of(ID_BLOCK_SIZE), nextIdsCalls, "a first block is reserved");
         assertEquals(List.of(104), List.copyOf(idPool), "what is not used now stays in the pool");
 
-        call(gen, request.formatted(1));
+        generate(1);
         assertEquals(1, nextIdsCalls.size(), "served from the pool, no database call");
 
-        call(gen, request.formatted(2));
+        generate(2);
         assertEquals(List.of(ID_BLOCK_SIZE, ID_BLOCK_SIZE), nextIdsCalls, "pool empty: a new block");
 
         // 2 ids left in the pool, 9 needed: the 7 missing ones are reserved at once, more than a block
-        call(gen, request.formatted(9));
+        generate(9);
         assertEquals(List.of(ID_BLOCK_SIZE, ID_BLOCK_SIZE, 7), nextIdsCalls);
         assertTrue(idPool.isEmpty());
 
@@ -341,17 +342,16 @@ class ItemEndpointsTest {
     }
 
     @Test
-    void sellAndGenerateRunUnderTheUserLock() throws Exception {
+    void sellRunsUnderTheUserLock() throws Exception {
         users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", CachedSession.hashKey(PRIV)));
-        call(endpoints.generateItemsForUser(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":1}");
         call(endpoints.sellItems(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"items\":[{\"id\":3}]}");
-        assertEquals(java.util.List.of(PUB, PUB), locked);
+        assertEquals(java.util.List.of(PUB), locked);
     }
 
     @Test
     void cachedMoneyIsNotOverwrittenByDatabaseSale() throws Exception {
         users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", CachedSession.hashKey(PRIV)));
-        JsonNode gen = call(endpoints.generateItemsForUser(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":1}");
+        JsonNode gen = generate(1);
         int id = gen.at("/payload/items/0/id").asInt();
         int price = gen.at("/payload/items/0/price").asInt();
         call(endpoints.sellItems(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"items\":[{\"id\":" + id + "}]}");
@@ -365,7 +365,7 @@ class ItemEndpointsTest {
     @Test
     void sellGeneratedItemsStaysInRedis() throws Exception {
         users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", CachedSession.hashKey(PRIV)));
-        JsonNode gen = call(endpoints.generateItemsForUser(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":2}");
+        JsonNode gen = generate(2);
         int id1 = gen.at("/payload/items/0/id").asInt();
         int id2 = gen.at("/payload/items/1/id").asInt();
         int expected = gen.at("/payload/items/0/price").asInt() + gen.at("/payload/items/1/price").asInt();
@@ -385,7 +385,7 @@ class ItemEndpointsTest {
     @Test
     void sellMixedAddsRedisValueInOneDbCall() throws Exception {
         users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", CachedSession.hashKey(PRIV)));
-        JsonNode gen = call(endpoints.generateItemsForUser(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"nb\":1}");
+        JsonNode gen = generate(1);
         int id = gen.at("/payload/items/0/id").asInt();
         int price = gen.at("/payload/items/0/price").asInt();
 

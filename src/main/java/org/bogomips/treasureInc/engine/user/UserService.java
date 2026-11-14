@@ -94,11 +94,12 @@ public class UserService {
     }
 
     /**
-     * Takes {@code amount} from the user's balance, under the user's lock. Only the cached session is debited: the
-     * next synchronization writes the balance to the database. Nothing is taken when the balance is too low.
+     * Takes {@code amount} from the user's balance. Only the cached session is debited: the next synchronization
+     * writes the balance to the database. Nothing is taken when the balance is too low.
+     * Call it inside the user's {@link Lock}.
      */
-    public Uni<SpendResult> spend(String publicKey, String privateKey, int amount) {
-        return lock.withLock(publicKey, () -> openSession(publicKey, privateKey).flatMap(user -> {
+    public Uni<SpendResult> spendLocked(String publicKey, String privateKey, int amount) {
+        return openSession(publicKey, privateKey).flatMap(user -> {
             if (user == null) {
                 return Uni.createFrom().item(new SpendResult(SpendResult.Status.UNAUTHORIZED, 0));
             }
@@ -107,7 +108,7 @@ public class UserService {
             }
             return credit(publicKey, -amount, true)
                     .map(updated -> new SpendResult(SpendResult.Status.OK, updated.money()));
-        }));
+        });
     }
 
     /**
@@ -155,7 +156,7 @@ public class UserService {
     public record CreatedUser(UserInfo user, String privateKey) {
     }
 
-    /** Outcome of {@link #spend}; money is the balance afterwards (unchanged unless OK). */
+    /** Outcome of {@link #spendLocked}; money is the balance afterwards (unchanged unless OK). */
     public record SpendResult(Status status, int money) {
 
         public enum Status { OK, UNAUTHORIZED, NOT_ENOUGH_MONEY }

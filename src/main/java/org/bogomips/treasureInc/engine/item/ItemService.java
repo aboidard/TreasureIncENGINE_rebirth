@@ -72,12 +72,9 @@ public class ItemService {
      * Generates items straight into the user's Redis list (no database write), with their final ids, pending until
      * the next synchronization inserts them; emits null on bad credentials.
      * The list is kept without expiry since Redis is then its only copy.
+     * Call it inside the user's {@link UserService.Lock}.
      */
-    public Uni<List<ItemInfo>> generate(String publicKey, String privateKey, int count) {
-        return lock.withLock(publicKey, () -> generateLocked(publicKey, privateKey, count));
-    }
-
-    private Uni<List<ItemInfo>> generateLocked(String publicKey, String privateKey, int count) {
+    public Uni<List<ItemInfo>> generateLocked(String publicKey, String privateKey, int count) {
         return users.openSession(publicKey, privateKey).flatMap(user -> {
             if (user == null) {
                 return Uni.createFrom().nullItem();
