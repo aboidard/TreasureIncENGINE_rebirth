@@ -50,9 +50,10 @@ Types de requête (`payload.type`) et paramètres (`payload.params`) :
 | `login` | `user`, `private_key` | 200 `{user}` · 401 |
 | `getItems` | `user`, `page` (dès 1), `limit` (≤ 100) | 200 `{items, page, limit, total}` · 404 |
 | `getPrivateItems` | idem + `private_key` | idem · 401 |
-| `generateItemsForUser` | `user`, `private_key`, `nb` (≤ 100) | 200 `{items}` · 401 |
 | `sellItems` | `user`, `private_key`, `items: [{id}]` | 200 `{totalPrice, money}` · 401 · 404 |
-| `startExpedition` | `user`, `private_key`, `cost` (≥ 1) | 200 `{money}` · 401 · 402 `{money}` |
+| `digCase` | `user`, `private_key`, `location`, `case_id`, `cost` (≥ 0) | 200 `{rarity, money}` · 401 · 402 `{money}` |
+| `startExpedition` | `user`, `private_key`, `location`, `difficulty`, `case_id` (optionnel) | 200 `{expeditionId, money, itemCount}` · 401 · 402 `{money}` |
+| `generateItemsForUser` | `user`, `private_key`, `expedition_id` | 200 `{items}` · 401 · 404 |
 | `healthcheck` | — | `{name, status, data, checks: [{name, status}]}` (checks de readiness : base, Redis) |
 
 Un paramètre manquant ou invalide renvoie 400.
@@ -77,6 +78,17 @@ Les accès aux données sont derrière des interfaces (cache, dépôt, verrou), 
 ### Génération procédurale
 Les objets trouvés en expédition sont générés à partir de catalogues de textes et d'une table de rareté pondérée, avec gestion de l'accord grammatical (genre, articles) en français.
 
+### Expéditions
+Les lieux et leur niveau se déclarent dans `engine.expeditions.locations` : ajouter un lieu revient à ajouter une ligne, plus l'asset correspondant dans le client.
+
+- **Creusage d'une case** : le premier clic paie le coût envoyé par le client et tire une rareté de 0 à 4. Tant qu'aucune expédition n'est envoyée vers ce lieu, recreuser la case renvoie la même rareté gratuitement.
+- **Envoi** : coût = `étages × 100 × niveau du lieu`. L'expédition est gardée dans Redis jusqu'à l'ouverture de son coffre.
+- **Coffre** : il ne s'ouvre qu'une fois. Son nombre d'objets est fixé à l'envoi :
+
+```
+n = min(15, max(1, round(étages × (0,5 + 0,25 × niveau) × (1 + 0,25 × rareté))))
+```
+
 ### Observabilité
 - Logs structurés `clé=valeur` (lisibles et exploitables dans Kibana), JSON en production, **masquage automatique** des champs sensibles et troncature des charges volumineuses.
 - Métriques **Prometheus** (Micrometer) et sondes de santé **SmallRye Health**.
@@ -88,7 +100,7 @@ src/main/java/.../engine
 ├── messaging   transport, dispatcher, contrat des handlers, format des réponses
 ├── user        joueurs : service, cache, verrou, persistance, handlers
 ├── item        objets : génération, cache, persistance, handlers
-├── expedition  expéditions : handlers, noms générés
+├── expedition  expéditions : creusage, envoi, coffres, règles, noms générés
 └── sync        synchronisation planifiée cache → base de données
 ```
 
