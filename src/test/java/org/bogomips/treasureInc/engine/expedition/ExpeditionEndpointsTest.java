@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.Uni;
+import org.bogomips.treasureInc.engine.character.CharacterService;
+import org.bogomips.treasureInc.engine.character.CrewStore;
+import org.bogomips.treasureInc.engine.character.InMemoryCrews;
 import org.bogomips.treasureInc.engine.expedition.ExpeditionService.Expedition;
 import org.bogomips.treasureInc.engine.item.ItemInfo;
 import org.bogomips.treasureInc.engine.item.ItemService;
@@ -171,6 +174,10 @@ class ExpeditionEndpointsTest {
             return Uni.createFrom().item(stored.get(expeditionId));
         }
 
+        public Uni<List<Expedition>> list(String publicKey) {
+            return Uni.createFrom().item(List.copyOf(stored.values()));
+        }
+
         public Uni<Void> put(String publicKey, Expedition expedition) {
             stored.put(expedition.id(), expedition);
             return Uni.createFrom().voidItem();
@@ -183,10 +190,24 @@ class ExpeditionEndpointsTest {
     };
 
     private final UserService users = new UserService(userRepo, userCache, lock, 10000);
-    private final ItemService items = new ItemService(itemRepo, itemCache, users, lock, GRAPHICS_COUNT, 4);
+    private final InMemoryCrews crews = new InMemoryCrews(PUB, 1);
+    private final CrewStore crewStore = crews.store();
+    // no generated item is an equipment, unless a test builds its own service
+    private final ItemService items = new ItemService(itemRepo, itemCache, users, lock, crewStore, GRAPHICS_COUNT, 4, 0);
     private final ExpeditionRules rules = new ExpeditionRules(ExpeditionRulesTest.config());
-    private final ExpeditionEndpoints endpoints =
-            new ExpeditionEndpoints(new ExpeditionService(store, users, items, lock, rules), rules);
+    private final CharacterService characters = new CharacterService(crewStore, items, users, lock,
+            publicKey -> store.list(publicKey).map(ExpeditionService::busyCharacters));
+    /** The luck charms always work with this generator, and never with the default one of the other tests. */
+    private final Random luck = new Random() {
+        @Override
+        public int nextInt(int bound) {
+            return bound == 100 ? luckRoll : super.nextInt(bound);
+        }
+    };
+    private int luckRoll = 99;
+    private final ExpeditionEndpoints endpoints = new ExpeditionEndpoints(
+            new ExpeditionService(store, users, items, lock, rules, characters, luck), rules, characters);
+    private int nextCharacter;
 
     private static String digKey(String location, int caseId) {
         return location + "/" + caseId;
@@ -201,8 +222,11 @@ class ExpeditionEndpointsTest {
         return call(endpoints.digCase(), "\"private_key\":\"" + PRIV + "\"," + fields);
     }
 
+    /** Sent with the next character, unless the fields name one: the tests have 3 of them. */
     private JsonNode start(String fields) throws Exception {
-        return call(endpoints.startExpedition(), "\"private_key\":\"" + PRIV + "\"," + fields);
+        String character = fields.contains("\"character\"") ? ""
+                : ",\"character\":" + (nextCharacter++ % InMemoryCrews.COUNT + 1);
+        return call(endpoints.startExpedition(), "\"private_key\":\"" + PRIV + "\"," + fields + character);
     }
 
     private JsonNode open(String expeditionId) throws Exception {
@@ -339,7 +363,13 @@ class ExpeditionEndpointsTest {
     @Test
     void startChecksItsParameters() throws Exception {
         RequestHandler h = endpoints.startExpedition();
-        assertEquals(401, call(h, "\"private_key\":\"bad\",\"location\":\"mordak\",\"difficulty\":1").get("status").asInt());
+        assertEquals(401, call(h, "\"private_key\":\"bad\",\"location\":\"mordak\",\"difficulty\":1,\"character\":1").get("status").asInt());
+        assertEquals(400, call(h, "\"private_key\":\"" + PRIV + "\",\"location\":\"mordak\",\"difficulty\":1").get("status").asInt(),
+                "an expedition needs a character");
+        assertEquals(400, start("\"location\":\"mordak\",\"difficulty\":1,\"character\":0").get("status").asInt());
+        assertEquals(400, start("\"location\":\"mordak\",\"difficulty\":1,\"character\":4").get("status").asInt());
+        assertEquals(400, start("\"location\":\"mordak\",\"difficulty\":1,\"character\":\"1\"").get("status").asInt());
+        assertEquals(400, start("\"location\":\"mordak\",\"difficulty\":1,\"character\":null").get("status").asInt());
         assertEquals(400, start("\"location\":\"morgoth\",\"difficulty\":1").get("status").asInt());
         assertEquals(400, start("\"difficulty\":1").get("status").asInt());
         assertEquals(400, start("\"location\":\"mordak\"").get("status").asInt());
@@ -349,6 +379,115 @@ class ExpeditionEndpointsTest {
         assertEquals(400, start("\"location\":\"mordak\",\"difficulty\":1,\"case_id\":18").get("status").asInt());
         assertEquals(400, start("\"location\":\"mordak\",\"difficulty\":1,\"case_id\":\"1\"").get("status").asInt());
         assertTrue(stored.isEmpty());
+    }
+
+    // ---- characters
+
+    @Test
+    void anExpeditionIsLedByItsCharacter() throws Exception {
+        JsonNode r = start("\"location\":\"mordak\",\"difficulty\":1,\"character\":2");
+        assertEquals(200, r.get("status").asInt());
+        assertEquals(2, r.at("/payload/character").asInt());
+        assertEquals(2, stored.get(r.at("/payload/expeditionId").asText()).character());
+    }
+
+    @Test
+    void aCharacterLeadsOneExpeditionAtATime() throws Exception {
+        JsonNode first = start("\"location\":\"mordak\",\"difficulty\":1,\"character\":2");
+        int moneyAfterFirst = money();
+
+        JsonNode again = start("\"location\":\"gardakan\",\"difficulty\":1,\"character\":2");
+        assertEquals(409, again.get("status").asInt());
+        assertEquals(moneyAfterFirst, money(), "nothing is paid");
+        assertEquals(1, stored.size());
+        assertEquals(401, call(endpoints.startExpedition(),
+                "\"private_key\":\"bad\",\"location\":\"mordak\",\"difficulty\":1,\"character\":2").get("status").asInt());
+
+        assertEquals(200, start("\"location\":\"gardakan\",\"difficulty\":1,\"character\":1").get("status").asInt());
+
+        // the character is back once its chest is opened
+        assertEquals(200, open(first.at("/payload/expeditionId").asText()).get("status").asInt());
+        assertEquals(200, start("\"location\":\"gardakan\",\"difficulty\":1,\"character\":2").get("status").asInt());
+    }
+
+    @Test
+    void nothingCanBeDugOrSentWhileEveryCharacterIsAway() throws Exception {
+        digs.put("mordak/1", 3);
+        String firstId = null;
+        for (int character = 1; character <= InMemoryCrews.COUNT; character++) {
+            JsonNode sent = start("\"location\":\"gardakan\",\"difficulty\":1,\"character\":" + character);
+            assertEquals(200, sent.get("status").asInt());
+            firstId = firstId == null ? sent.at("/payload/expeditionId").asText() : firstId;
+        }
+        int before = money();
+
+        assertEquals(409, dig("\"location\":\"mordak\",\"case_id\":2,\"cost\":500").get("status").asInt());
+        assertEquals(409, dig("\"location\":\"mordak\",\"case_id\":1,\"cost\":500").get("status").asInt(),
+                "even a case that is already dug");
+        for (int character = 1; character <= InMemoryCrews.COUNT; character++) {
+            assertEquals(409, start("\"location\":\"mordak\",\"difficulty\":1,\"character\":" + character).get("status").asInt());
+        }
+        assertEquals(before, money());
+        assertNull(digs.get("mordak/2"));
+        assertEquals(401, call(endpoints.digCase(),
+                "\"private_key\":\"bad\",\"location\":\"mordak\",\"case_id\":2,\"cost\":500").get("status").asInt());
+
+        open(firstId);
+        assertEquals(200, dig("\"location\":\"mordak\",\"case_id\":2,\"cost\":500").get("status").asInt());
+        assertEquals(before - 500, money());
+    }
+
+    @Test
+    void anExpeditionSentBeforeCharactersExistedKeepsNobodyBusy() throws Exception {
+        stored.put("old", new Expedition("old", "mordak", 1, 0, 2, "t", null));
+        for (int character = 1; character <= InMemoryCrews.COUNT; character++) {
+            assertEquals(200, start("\"location\":\"mordak\",\"difficulty\":1,\"character\":" + character).get("status").asInt());
+        }
+        assertEquals(2, open("old").at("/payload/items").size());
+    }
+
+    /** Character 1 wears two luck charms and a ring without the skill. */
+    private void wearLuckCharms() {
+        itemLists.put(PUB, new ItemList(true, List.of(
+                new ItemInfo(1, "anneau rare", "d", 0, 10, "rare", "t", "t", null, Map.of("slot", 7, "luk", 9, "spe1", "luck_charm")),
+                new ItemInfo(2, "amulette rare", "d", 7, 10, "rare", "t", "t", null,
+                        Map.of("slot", 8, "luk", 9, "spe1", "breakable", "spe2", "luck_charm")),
+                new ItemInfo(3, "talisman rare", "d", 39, 10, "rare", "t", "t", null, Map.of("slot", 9, "luk", 9)))));
+        assertEquals(CharacterService.Status.OK, characters.equip(PUB, PRIV, 1, 7, 1).await().indefinitely().status());
+        assertEquals(CharacterService.Status.OK, characters.equip(PUB, PRIV, 1, 8, 2).await().indefinitely().status());
+        assertEquals(CharacterService.Status.OK, characters.equip(PUB, PRIV, 1, 9, 3).await().indefinitely().status());
+    }
+
+    @Test
+    void eachLuckCharmOfTheCharacterMayAddAnItemToTheChest() throws Exception {
+        wearLuckCharms();
+        JsonNode sent = start("\"location\":\"mordak\",\"difficulty\":4,\"character\":1");
+        int expected = sent.at("/payload/itemCount").asInt();
+
+        luckRoll = 24;
+        JsonNode r = open(sent.at("/payload/expeditionId").asText());
+        assertEquals(200, r.get("status").asInt());
+        assertEquals(expected + 2, r.at("/payload/items").size(), "one more item for each of the two charms");
+    }
+
+    @Test
+    void aLuckCharmDoesNotAlwaysWork() throws Exception {
+        wearLuckCharms();
+        JsonNode sent = start("\"location\":\"mordak\",\"difficulty\":4,\"character\":1");
+
+        luckRoll = 25;
+        JsonNode r = open(sent.at("/payload/expeditionId").asText());
+        assertEquals(sent.at("/payload/itemCount").asInt(), r.at("/payload/items").size());
+    }
+
+    @Test
+    void theLuckCharmsOfAnotherCharacterDoNotCount() throws Exception {
+        wearLuckCharms();
+        JsonNode sent = start("\"location\":\"mordak\",\"difficulty\":4,\"character\":2");
+
+        luckRoll = 0;
+        JsonNode r = open(sent.at("/payload/expeditionId").asText());
+        assertEquals(sent.at("/payload/itemCount").asInt(), r.at("/payload/items").size());
     }
 
     // ---- generateItemsForUser

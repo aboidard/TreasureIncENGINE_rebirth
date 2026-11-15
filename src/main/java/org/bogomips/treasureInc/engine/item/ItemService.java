@@ -22,16 +22,20 @@ public class ItemService {
     private final Cache itemCache;
     private final UserService users;
     private final UserService.Lock lock;
+    private final Equipped equipped;
     private final ItemCatalog catalog;
     private final int idBlockSize;
 
     /**
      * @param graphicsCount number of item sprites in the client (ItemManager.sprites); a graphics id is below it
      * @param idBlockSize   how many ids are reserved from the database sequence at once
+     * @param equipableChance chance, in percent, that a generated item is an equipment
      */
     public ItemService(Repository repository, Cache itemCache, UserService users, UserService.Lock lock,
+                       Equipped equipped,
                        @ConfigProperty(name = "engine.items.graphics-count") int graphicsCount,
-                       @ConfigProperty(name = "engine.items.id-block-size", defaultValue = "100") int idBlockSize) {
+                       @ConfigProperty(name = "engine.items.id-block-size", defaultValue = "100") int idBlockSize,
+                       @ConfigProperty(name = "engine.items.equipable-chance", defaultValue = "5") double equipableChance) {
         if (idBlockSize < 1) {
             throw new IllegalArgumentException("engine.items.id-block-size must be at least 1, got " + idBlockSize);
         }
@@ -39,7 +43,8 @@ public class ItemService {
         this.itemCache = itemCache;
         this.users = users;
         this.lock = lock;
-        this.catalog = new ItemCatalog(RandomGenerator.getDefault(), graphicsCount);
+        this.equipped = equipped;
+        this.catalog = new ItemCatalog(RandomGenerator.getDefault(), graphicsCount, equipableChance);
         this.idBlockSize = idBlockSize;
     }
 
@@ -54,18 +59,24 @@ public class ItemService {
         });
     }
 
-    /** 1-based page; emits null when the public key is unknown. */
+    /**
+     * 1-based page of the inventory, which leaves out the items equipped on a character; emits null when the
+     * public key is unknown.
+     */
     public Uni<Page> page(String publicKey, int page, int limit) {
-        return list(publicKey).map(list -> {
-            if (!list.userFound()) {
-                return null;
-            }
-            List<ItemInfo> all = list.items();
-            long from = (long) (page - 1) * limit;
-            List<ItemInfo> slice = from >= all.size() ? List.of()
-                    : all.subList((int) from, (int) Math.min(all.size(), from + limit));
-            return new Page(slice, page, limit, all.size());
-        });
+        return list(publicKey).flatMap(list -> !list.userFound() ? Uni.createFrom().nullItem()
+                : equipped.ids(publicKey).map(worn -> page(inventory(list, worn), page, limit)));
+    }
+
+    private static List<ItemInfo> inventory(ItemList list, Set<Integer> worn) {
+        return worn.isEmpty() ? list.items() : list.items().stream().filter(i -> !worn.contains(i.id())).toList();
+    }
+
+    private static Page page(List<ItemInfo> all, int page, int limit) {
+        long from = (long) (page - 1) * limit;
+        List<ItemInfo> slice = from >= all.size() ? List.of()
+                : all.subList((int) from, (int) Math.min(all.size(), from + limit));
+        return new Page(slice, page, limit, all.size());
     }
 
     /**
@@ -130,9 +141,10 @@ public class ItemService {
             if (user == null) {
                 return Uni.createFrom().item(SellResult.of(SellResult.Status.UNAUTHORIZED));
             }
-            return list(publicKey).flatMap(list -> {
+            return list(publicKey).flatMap(list -> equipped.ids(publicKey).flatMap(worn -> {
                 Map<Integer, ItemInfo> byId = new HashMap<>();
-                list.items().forEach(i -> byId.put(i.id(), i));
+                // an equipped item is not in the inventory: it must be taken off before it can be sold
+                inventory(list, worn).forEach(i -> byId.put(i.id(), i));
                 if (!byId.keySet().containsAll(ids)) {
                     return Uni.createFrom().item(SellResult.of(SellResult.Status.NOT_FOUND));
                 }
@@ -143,7 +155,7 @@ public class ItemService {
                     return sellRedisOnly(publicKey, privateKey, ids, redisTotal);
                 }
                 return sellWithDatabase(publicKey, privateKey, ids, dbIds, redisTotal);
-            });
+            }));
         });
     }
 
@@ -233,6 +245,12 @@ public class ItemService {
         Uni<Void> insertAll(int userId, List<ItemInfo> items);
 
         Uni<Void> deleteByIds(int userId, List<Integer> ids);
+    }
+
+    /** Implemented by the character domain. */
+    public interface Equipped {
+        /** Ids of the items equipped on the characters of the user; empty when the public key is unknown. */
+        Uni<Set<Integer>> ids(String publicKey);
     }
 
     public interface Cache {

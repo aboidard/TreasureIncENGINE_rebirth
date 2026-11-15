@@ -47,6 +47,7 @@ class PanacheItemRepository implements ItemService.Repository {
             e.graphics = i.graphics();
             e.price = i.price();
             e.rarity = i.rarity();
+            e.stats = i.stats();
             e.userId = userId;
             e.createdAt = now;
             e.updatedAt = now;

@@ -15,12 +15,24 @@ public record ItemInfo(
         @JsonProperty("rarity") String rarity,
         @JsonProperty("createdat") String createdAt,
         @JsonProperty("updatedat") String updatedAt,
-        @JsonProperty("descriptionId") Integer descriptionId) {
+        @JsonProperty("descriptionId") Integer descriptionId,
+        @JsonProperty("stats") Map<String, Object> stats) {
+
+    /** Item that cannot be equipped (no stats). */
+    public ItemInfo(int id, String name, String description, Integer graphics, Integer price, String rarity,
+                    String createdAt, String updatedAt, Integer descriptionId) {
+        this(id, name, description, graphics, price, rarity, createdAt, updatedAt, descriptionId, null);
+    }
 
     /** Item whose description is plain text (database items). */
     public ItemInfo(int id, String name, String description, Integer graphics, Integer price, String rarity,
                     String createdAt, String updatedAt) {
-        this(id, name, description, graphics, price, rarity, createdAt, updatedAt, null);
+        this(id, name, description, graphics, price, rarity, createdAt, updatedAt, null, null);
+    }
+
+    /** An item is equipable when it has stats (see {@link Equipment}). */
+    public boolean equipable() {
+        return stats != null;
     }
 
     /** Plain text if present, otherwise the catalogue text for the stored description id. */
@@ -38,6 +50,7 @@ public record ItemInfo(
         m.put("rarity", rarity);
         m.put("createdat", createdAt);
         m.put("updatedat", updatedAt);
+        m.put("stats", stats);
         return m;
     }
 }

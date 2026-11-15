@@ -3,6 +3,7 @@ package org.bogomips.treasureInc.engine.sync;
 import io.quarkus.scheduler.Scheduled;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
+import org.bogomips.treasureInc.engine.character.CrewStore;
 import org.bogomips.treasureInc.engine.item.ItemInfo;
 import org.bogomips.treasureInc.engine.item.ItemService.ItemList;
 import org.bogomips.treasureInc.engine.item.ItemService;
@@ -18,7 +19,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Writes what only lives in Redis (user balance, generated items) to the database, and evicts idle sessions.
+ * Writes what only lives in Redis (user balance, generated items, equipment of the characters) to the database, and evicts idle sessions.
  * A session is synchronized when it has pending changes and its last synchronization is older than {@code maxAge}.
  * A session without pending changes and idle for longer than {@code sessionTtl} is removed from Redis.
  */
@@ -32,11 +33,12 @@ public class CacheSyncService {
     private final UserService.Repository userRepository;
     private final ItemService.Repository itemRepository;
     private final UserService.Lock lock;
+    private final CrewStore crews;
     private final Duration maxAge;
     private final Duration sessionTtl;
 
     public CacheSyncService(UserService.Cache userCache, ItemService.Cache itemCache, UserService.Repository userRepository,
-                            ItemService.Repository itemRepository, UserService.Lock lock,
+                            ItemService.Repository itemRepository, UserService.Lock lock, CrewStore crews,
                             @ConfigProperty(name = "engine.sync.max-age", defaultValue = "3m") Duration maxAge,
                             @ConfigProperty(name = "engine.sync.session-ttl", defaultValue = "1h") Duration sessionTtl) {
         this.userCache = userCache;
@@ -44,6 +46,7 @@ public class CacheSyncService {
         this.userRepository = userRepository;
         this.itemRepository = itemRepository;
         this.lock = lock;
+        this.crews = crews;
         this.maxAge = maxAge;
         this.sessionTtl = sessionTtl;
     }
@@ -103,8 +106,8 @@ public class CacheSyncService {
     }
 
     private Uni<Void> evict(String publicKey) {
-        // the database holds everything by now, so the items list can be dropped too
-        return itemCache.evict(publicKey).flatMap(v -> userCache.evict(publicKey))
+        // the database holds everything by now, so the items list and the characters can be dropped too
+        return itemCache.evict(publicKey).flatMap(v -> crews.evict(publicKey)).flatMap(v -> userCache.evict(publicKey))
                 .invoke(() -> LOG.debugf("event=session_evicted user=%s idleLongerThan=%s", publicKey, sessionTtl));
     }
 
@@ -114,6 +117,7 @@ public class CacheSyncService {
         int money = session.user().money();
         return userRepository.updateMoney(userId, money)
                 .flatMap(v -> syncItems(publicKey, userId))
+                .flatMap(inserted -> crews.sync(publicKey, userId).replaceWith(inserted))
                 .flatMap(inserted -> markSynced(publicKey, money)
                         .invoke(() -> LOG.debugf("event=sync_done user=%s money=%d itemsInserted=%d",
                                 publicKey, money, inserted)));

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Produces;
+import org.bogomips.treasureInc.engine.character.CharacterService;
 import org.bogomips.treasureInc.engine.item.ItemInfo;
 import org.bogomips.treasureInc.engine.messaging.Protocol;
 import org.bogomips.treasureInc.engine.messaging.RequestHandler;
@@ -18,10 +19,12 @@ class ExpeditionEndpoints {
 
     private final ExpeditionService expeditions;
     private final ExpeditionRules rules;
+    private final CharacterService characters;
 
-    ExpeditionEndpoints(ExpeditionService expeditions, ExpeditionRules rules) {
+    ExpeditionEndpoints(ExpeditionService expeditions, ExpeditionRules rules, CharacterService characters) {
         this.expeditions = expeditions;
         this.rules = rules;
+        this.characters = characters;
     }
 
     /** Reveals the rarity of a case, for the cost given by the client. */
@@ -57,6 +60,9 @@ class ExpeditionEndpoints {
             case UNAUTHORIZED -> Protocol.unauthorized();
             case NOT_ENOUGH_MONEY -> notEnoughMoney(result.money());
             case OK -> {
+                if (result.noCharacter()) {
+                    yield Protocol.reply(409, "No character available");
+                }
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("rarity", result.rarity());
                 payload.put("money", result.money());
@@ -72,19 +78,25 @@ class ExpeditionEndpoints {
         Integer difficulty = required(params, "difficulty");
         boolean hasCase = params != null && params.hasNonNull("case_id");
         Integer caseId = hasCase ? required(params, "case_id") : null;
-        if (publicKey == null || privateKey == null || location == null || difficulty == null
-                || !rules.isValidDifficulty(difficulty) || (hasCase && (caseId == null || !rules.isValidCase(caseId)))) {
+        Integer character = required(params, "character");
+        if (publicKey == null || privateKey == null || location == null || difficulty == null || character == null
+                || !rules.isValidDifficulty(difficulty) || !characters.isValid(character)
+                || (hasCase && (caseId == null || !rules.isValidCase(caseId)))) {
             return Uni.createFrom().item(Protocol.badRequest());
         }
-        return expeditions.start(publicKey, privateKey, location, difficulty, caseId).map(result -> {
+        return expeditions.start(publicKey, privateKey, location, difficulty, caseId, character).map(result -> {
             if (result.status() == SpendResult.Status.UNAUTHORIZED) {
                 return Protocol.unauthorized();
             }
             if (result.status() == SpendResult.Status.NOT_ENOUGH_MONEY) {
                 return notEnoughMoney(result.money());
             }
+            if (result.characterBusy()) {
+                return Protocol.reply(409, "The character is on an expedition");
+            }
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("expeditionId", result.expedition().id());
+            payload.put("character", result.expedition().character());
             payload.put("money", result.money());
             payload.put("itemCount", result.expedition().itemCount());
             return Protocol.reply(200, "OK", payload);

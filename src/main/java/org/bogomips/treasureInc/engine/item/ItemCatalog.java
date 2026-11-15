@@ -1,7 +1,10 @@
 package org.bogomips.treasureInc.engine.item;
 
 import java.time.Instant;
+import org.bogomips.treasureInc.engine.item.Equipment.Kind;
+
 import java.util.List;
+import java.util.Map;
 import java.util.random.RandomGenerator;
 
 /**
@@ -188,22 +191,45 @@ class ItemCatalog {
 
     private final RandomGenerator random;
     private final int graphicsCount;
+    private final double equipableChance;
+    private final Map<Kind, List<Integer>> equipmentSprites;
+    private final List<Kind> equipmentKinds;
 
-    /** @param graphicsCount number of item sprites in the client; generated graphics ids are in [0, graphicsCount) */
-    ItemCatalog(RandomGenerator random, int graphicsCount) {
+    /**
+     * @param graphicsCount   number of item sprites in the client; generated graphics ids are in [0, graphicsCount)
+     * @param equipableChance chance, in percent, that a generated item is an equipment
+     */
+    ItemCatalog(RandomGenerator random, int graphicsCount, double equipableChance) {
         if (graphicsCount < 1) {
             throw new IllegalArgumentException("graphicsCount must be at least 1, got " + graphicsCount);
         }
+        if (equipableChance < 0 || equipableChance > 100) {
+            throw new IllegalArgumentException("equipableChance must be in 0..100, got " + equipableChance);
+        }
         this.random = random;
         this.graphicsCount = graphicsCount;
+        this.equipableChance = equipableChance;
+        this.equipmentSprites = Equipment.sprites(graphicsCount);
+        this.equipmentKinds = List.copyOf(equipmentSprites.keySet());
     }
 
+    /**
+     * An equipment (see {@link Equipment}) gets the name and one of the sprites of its kind, and its stats;
+     * any other item has no stats and any sprite.
+     */
     public ItemInfo generate(int id) {
         Rarity rarity = Rarity.fromRoll(random.nextInt(1000) + 1);
         int price = (random.nextInt(1000) + 1000) * rarity.coef();
         String now = Instant.now().toString();
-        return new ItemInfo(id, itemName(rarity, random), null, random.nextInt(graphicsCount), price, rarity.value(),
-                now, now, randomDescriptionId(rarity, random));
+        if (equipmentKinds.isEmpty() || random.nextDouble() * 100 >= equipableChance) {
+            return new ItemInfo(id, itemName(nouns(rarity), rarity, random), null, random.nextInt(graphicsCount), price,
+                    rarity.value(), now, now, randomDescriptionId(rarity, random));
+        }
+        Kind kind = equipmentKinds.get(random.nextInt(equipmentKinds.size()));
+        List<Integer> sprites = equipmentSprites.get(kind);
+        return new ItemInfo(id, itemName(kind.nouns, rarity, random), null, sprites.get(random.nextInt(sprites.size())),
+                price, rarity.value(), now, now, randomDescriptionId(rarity, random),
+                Equipment.randomStats(kind, rarity, random));
     }
 
     /** Text for a stored description id; null if the id is unknown. */
@@ -212,19 +238,22 @@ class ItemCatalog {
         return id == null || id < 0 || id >= list.size() ? null : list.get(id);
     }
 
-    private static String itemName(Rarity rarity, RandomGenerator random) {
-        List<String> adjectives;
-        List<String> nouns;
-        switch (rarity) {
-            case UNCOMMON -> { adjectives = UNCOMMON_ADJECTIVE; nouns = COMMON_ITEM; }
-            case RARE -> { adjectives = RARE_ADJECTIVE; nouns = RARE_ITEM; }
-            case EPIC -> { adjectives = EPIC_ADJECTIVE; nouns = RARE_ITEM; }
-            case LEGENDARY -> { adjectives = LEGENDARY_ADJECTIVE; nouns = RARE_ITEM; }
-            default -> { adjectives = COMMON_ADJECTIVE; nouns = COMMON_ITEM; }
-        }
+    /** @param nouns "noun,gender" entries; the adjective comes from the rarity and agrees with the noun */
+    private static String itemName(List<String> nouns, Rarity rarity, RandomGenerator random) {
+        List<String> adjectives = switch (rarity) {
+            case UNCOMMON -> UNCOMMON_ADJECTIVE;
+            case RARE -> RARE_ADJECTIVE;
+            case EPIC -> EPIC_ADJECTIVE;
+            case LEGENDARY -> LEGENDARY_ADJECTIVE;
+            default -> COMMON_ADJECTIVE;
+        };
         String[] adj = pick(adjectives, random).split(",");
         String[] item = pick(nouns, random).split(",");
         return item[0] + " " + agree(adj, FEMININE.equals(item[1]));
+    }
+
+    private static List<String> nouns(Rarity rarity) {
+        return rarity == Rarity.COMMON || rarity == Rarity.UNCOMMON ? COMMON_ITEM : RARE_ITEM;
     }
 
     /** Random description id, valid for {@link #description(Rarity, Integer)} with the same rarity. */

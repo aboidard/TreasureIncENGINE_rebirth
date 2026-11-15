@@ -3,6 +3,8 @@ package org.bogomips.treasureInc.engine.item;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.smallrye.mutiny.Uni;
+import org.bogomips.treasureInc.engine.character.CrewStore;
+import org.bogomips.treasureInc.engine.character.InMemoryCrews;
 import org.bogomips.treasureInc.engine.item.ItemCatalog.Rarity;
 import org.bogomips.treasureInc.engine.item.ItemService.ItemList;
 import org.bogomips.treasureInc.engine.item.ItemService.SellResult;
@@ -178,8 +180,10 @@ class ItemEndpointsTest {
             return Uni.createFrom().deferred(action::get);
         }
     };
+    private final InMemoryCrews crews = new InMemoryCrews(PUB, 1);
+    private final CrewStore crewStore = crews.store();
     private final UserService userService = new UserService(userRepo, userCache, lock, 10000);
-    private final ItemService service = new ItemService(itemRepo, cache, userService, lock, GRAPHICS_COUNT, ID_BLOCK_SIZE);
+    private final ItemService service = new ItemService(itemRepo, cache, userService, lock, crewStore, GRAPHICS_COUNT, ID_BLOCK_SIZE, 0);
     private final ItemEndpoints endpoints = new ItemEndpoints(service, userService);
 
     private JsonNode call(RequestHandler h, String json) throws Exception {
@@ -262,7 +266,7 @@ class ItemEndpointsTest {
         assertTrue(users.get(PUB).dirty());
         int soldPrice = gen.at("/payload/items/1/price").asInt();
 
-        CacheSyncService sync = new CacheSyncService(userCache, cache, userRepo, itemRepo, lock, java.time.Duration.ofMinutes(3), java.time.Duration.ofHours(1));
+        CacheSyncService sync = new CacheSyncService(userCache, cache, userRepo, itemRepo, lock, crewStore, java.time.Duration.ofMinutes(3), java.time.Duration.ofHours(1));
         // too early: lastSync is "old"-based, so force a recent one
         users.put(PUB, users.get(PUB).synced(java.time.Instant.now(), true));
         assertEquals(0, sync.syncDue(java.time.Instant.now()).await().indefinitely());
@@ -287,7 +291,7 @@ class ItemEndpointsTest {
         users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), justNow, CachedSession.hashKey(PRIV)));
         JsonNode gen = generate(1);
         int id = gen.at("/payload/items/0/id").asInt();
-        CacheSyncService sync = new CacheSyncService(userCache, cache, userRepo, itemRepo, lock,
+        CacheSyncService sync = new CacheSyncService(userCache, cache, userRepo, itemRepo, lock, crewStore,
                 java.time.Duration.ofMinutes(3), java.time.Duration.ofHours(1));
         assertEquals(1, sync.syncDue(java.time.Instant.now().plusSeconds(181)).await().indefinitely());
 
@@ -331,7 +335,7 @@ class ItemEndpointsTest {
         users.put("00000000002", new CachedSession(other, longAgo.toString(), "h", longAgo.toString(), true));
         itemCache.put(PUB, new ItemList(true, java.util.List.of()));
 
-        CacheSyncService sync = new CacheSyncService(userCache, cache, userRepo, itemRepo, lock,
+        CacheSyncService sync = new CacheSyncService(userCache, cache, userRepo, itemRepo, lock, crewStore,
                 java.time.Duration.ofMinutes(3), java.time.Duration.ofHours(1));
         assertEquals(1, sync.syncDue(java.time.Instant.now()).await().indefinitely());
 
