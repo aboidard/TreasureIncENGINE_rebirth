@@ -24,19 +24,21 @@ class PanacheCharacterRepository implements CrewStore.Repository {
             return ofUser(user.id).flatMap(existing -> {
                 Map<Integer, Map<Integer, Integer>> crew = new TreeMap<>();
                 Map<Integer, Integer> copies = new TreeMap<>();
+                Map<Integer, Integer> xp = new TreeMap<>();
                 existing.forEach(c -> {
                     crew.put(c.num, slots(c.equipment));
                     copies.put(c.num, c.copies == null ? 1 : c.copies);
+                    xp.put(c.num, c.xp == null ? 0 : c.xp);
                 });
                 List<GameCharacter> missing = new ArrayList<>();
                 for (int num = 1; num <= count; num++) {
                     if (crew.putIfAbsent(num, Map.of()) == null) {
                         copies.put(num, 1);
-                        missing.add(newCharacter(user.id, num, Map.of(), 1));
+                        missing.add(newCharacter(user.id, num, Map.of(), 1, 0));
                     }
                 }
                 Uni<Void> created = missing.isEmpty() ? Uni.createFrom().voidItem() : GameCharacter.persist(missing);
-                return created.replaceWith(new CrewStore.Roster(crew, copies));
+                return created.replaceWith(new CrewStore.Roster(crew, copies, xp));
             });
         }));
     }
@@ -51,13 +53,15 @@ class PanacheCharacterRepository implements CrewStore.Repository {
                 if (worn != null) {
                     c.equipment = json(worn);
                     c.copies = roster.copies().getOrDefault(c.num, 1);
+                    c.xp = roster.xp().getOrDefault(c.num, 0);
                     c.updatedAt = now;
                 }
             }
             // the characters recruited since the last synchronization
             List<GameCharacter> missing = left.entrySet().stream()
                     .map(e -> newCharacter(userId, e.getKey(), e.getValue(),
-                            roster.copies().getOrDefault(e.getKey(), 1))).toList();
+                            roster.copies().getOrDefault(e.getKey(), 1), roster.xp().getOrDefault(e.getKey(), 0)))
+                    .toList();
             return missing.isEmpty() ? Uni.createFrom().voidItem() : GameCharacter.persist(missing);
         }));
     }
@@ -66,12 +70,14 @@ class PanacheCharacterRepository implements CrewStore.Repository {
         return GameCharacter.list("userId = ?1 order by num", userId);
     }
 
-    private static GameCharacter newCharacter(int userId, int num, Map<Integer, Integer> equipment, int copies) {
+    private static GameCharacter newCharacter(int userId, int num, Map<Integer, Integer> equipment, int copies,
+                                              int xp) {
         GameCharacter c = new GameCharacter();
         c.userId = userId;
         c.num = num;
         c.equipment = json(equipment);
         c.copies = copies;
+        c.xp = xp;
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         c.createdAt = now;
         c.updatedAt = now;

@@ -21,6 +21,9 @@ public interface ExpeditionConfig {
     /** Cost of one floor for a location of level 1. */
     int costPerFloor();
 
+    /** Experience points of one floor for a location of level 1, before the bonus of the rarity. */
+    int xpPerFloor();
+
     /** How long the dug cases of a location are remembered when no expedition is sent. */
     Duration digTtl();
 

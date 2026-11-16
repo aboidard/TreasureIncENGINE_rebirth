@@ -44,6 +44,14 @@ class ExpeditionRules {
         return Math.min(config.maxItems(), Math.max(1, items));
     }
 
+    /**
+     * The experience points the character leading the expedition earns:
+     * {@code difficulty * xpPerFloor * level * (1 + 0.25 * rarity)}, rounded down.
+     */
+    int xp(String location, int difficulty, int rarity) {
+        return difficulty * config.xpPerFloor() * level(location) * (4 + rarity) / 4;
+    }
+
     /** @param roll a number in 1..1000 */
     static int rarityFromRoll(int roll) {
         if (roll <= 650) return 0;

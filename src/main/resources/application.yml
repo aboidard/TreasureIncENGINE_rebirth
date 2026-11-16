@@ -34,6 +34,9 @@ engine:
     max-items: 15
     # cost of an expedition = floors * cost-per-floor * location level
     cost-per-floor: 100
+    # experience of the character leading an expedition = floors * xp-per-floor * location level * (1 + rarity / 4);
+    # the levels themselves are in Leveling
+    xp-per-floor: 10
     # how long the dug cases of a location are remembered when no expedition is sent there
     dig-ttl: 24h
     # how long the unopened expeditions of a user are kept after the last one was sent
