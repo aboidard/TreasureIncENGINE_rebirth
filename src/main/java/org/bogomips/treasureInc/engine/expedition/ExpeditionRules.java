@@ -52,6 +52,14 @@ class ExpeditionRules {
         return difficulty * config.xpPerFloor() * level(location) * (4 + rarity) / 4;
     }
 
+    /**
+     * What an expedition whose character stopped before the end brings back of a full amount (items, experience):
+     * the share of the floors whose chest was reached, rounded down.
+     */
+    static int share(int full, int floorsCompleted, int floors) {
+        return floorsCompleted >= floors ? full : full * Math.max(0, floorsCompleted) / floors;
+    }
+
     /** @param roll a number in 1..1000 */
     static int rarityFromRoll(int roll) {
         if (roll <= 650) return 0;
@@ -61,7 +69,8 @@ class ExpeditionRules {
         return 4;
     }
 
-    private int level(String location) {
+    /** The level of a location, from 1: what is found there, and what is met there, grows with it. */
+    int level(String location) {
         return config.locations().get(location).level();
     }
 }

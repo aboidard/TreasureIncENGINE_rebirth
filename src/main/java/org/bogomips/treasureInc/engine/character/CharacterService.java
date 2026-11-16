@@ -3,16 +3,21 @@ package org.bogomips.treasureInc.engine.character;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.bogomips.treasureInc.engine.character.CrewStore.Crew;
+import org.bogomips.treasureInc.engine.combat.Fighter;
 import org.bogomips.treasureInc.engine.item.Equipment;
+import org.bogomips.treasureInc.engine.item.Equipment.Skill;
 import org.bogomips.treasureInc.engine.item.ItemInfo;
 import org.bogomips.treasureInc.engine.item.ItemService;
 import org.bogomips.treasureInc.engine.user.UserService;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.function.Function;
@@ -92,6 +97,41 @@ public class CharacterService {
             return items.list(publicKey).map(list -> List.copyOf(worn(crew.equipment(num), list.items()).values()));
         });
     }
+
+    /**
+     * The character as it fights now: its stats at its level, with those and the skills of what it wears.
+     * Null when the user does not have it. Call it inside the user's lock, for a logged user.
+     */
+    public Uni<Fighter> fighterLocked(String publicKey, int num) {
+        return crews.get(publicKey).flatMap(crew -> {
+            CharacterCatalog.Info info = CharacterCatalog.get(num);
+            if (crew == null || info == null || !crew.owns(num)) {
+                return Uni.createFrom().nullItem();
+            }
+            return equippedLocked(publicKey, num).map(worn -> fighter(info, Leveling.level(crew.xp(num)), worn));
+        });
+    }
+
+    /** A character of this level wearing these items, as it fights. */
+    static Fighter fighter(CharacterCatalog.Info info, int level, Collection<ItemInfo> worn) {
+        Map<String, Object> own = Leveling.stats(info, level);
+        Set<Skill> skills = EnumSet.noneOf(Skill.class);
+        skills.addAll(info.skills());
+        int[] total = new int[STATS.size()];
+        for (int i = 0; i < total.length; i++) {
+            total[i] = Equipment.stat(own, STATS.get(i));
+        }
+        for (ItemInfo item : worn) {
+            for (int i = 0; i < total.length; i++) {
+                total[i] += Equipment.stat(item.stats(), STATS.get(i));
+            }
+            skills.addAll(Equipment.skills(item.stats()));
+        }
+        return Fighter.of(total[0], total[1], total[2], total[3], skills);
+    }
+
+    private static final List<String> STATS =
+            List.of(Equipment.STRENGTH, Equipment.CONSTITUTION, Equipment.AGILITY, Equipment.LUCK);
 
     /**
      * Gives experience points to a character of the user; null when the user does not have it. A character at the
@@ -180,7 +220,8 @@ public class CharacterService {
     /**
      * A character of a user as shown to the client: who it is, how many times the user obtained it, the experience
      * points it earned and what it wears; expeditionId is null unless the character is on an expedition.
-     * The client receives its level, and its stats at this level (see {@link Leveling}).
+     * The client receives its level, its stats at this level (see {@link Leveling}), its own skills, and what its
+     * stats, its skills and its equipment make of it in a fight ("combat", see {@link Fighter}).
      */
     public record CharacterView(CharacterCatalog.Info info, int copies, int totalXp, String expeditionId,
                                 Map<Integer, ItemInfo> equipment) {
@@ -195,6 +236,7 @@ public class CharacterService {
             Leveling.Progress progress = Leveling.progress(totalXp);
             Map<String, Object> m = new LinkedHashMap<>(info.toMap());
             m.put("stats", Leveling.stats(info, progress.level()));
+            m.put("combat", fighter(info, progress.level(), equipment.values()).toMap());
             m.put("level", progress.level());
             m.put("xp", progress.xp());
             m.put("xpNext", progress.xpNext());

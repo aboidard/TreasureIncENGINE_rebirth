@@ -206,6 +206,11 @@ class CharacterEndpointsTest {
         assertEquals("Kentucky Johanes", list.at("/0/name").asText());
         assertEquals("C", list.at("/0/rank").asText());
         assertEquals(4, list.at("/0/stats/for").asInt());
+        assertEquals(3, list.at("/0/stats/agi").asInt());
+        assertTrue(list.at("/0/skills").isArray() && list.at("/0/skills").isEmpty(), "a C has no skill of its own");
+        // as it fights: 60 + 8 * 3 of constitution, 6 + 2 * 4 of strength, 2000 / 1.15 for 3 of agility
+        assertEquals("{\"hp\":84,\"attack\":14,\"defense\":3,\"interval\":1739,\"crit\":6,\"dodge\":0}",
+                list.at("/0/combat").toString());
         assertEquals(Set.of(1, 2, 3), crews.database.get(PUB).keySet(), "the characters are created in the database");
         assertFalse(sessions.get(PUB).dirty(), "nothing to synchronize");
     }

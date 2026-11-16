@@ -9,9 +9,42 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ExpeditionRulesTest {
 
-    /** The values of application.yml. */
+    /** The values of application.yml, but for the obstacles: none stands in the way of the expeditions. */
     static ExpeditionConfig config() {
+        return config(NO_OBSTACLE);
+    }
+
+    static final ExpeditionConfig.Obstacles NO_OBSTACLE = obstacles(2, 0, 0, 0);
+
+    /** The obstacles of application.yml. */
+    static final ExpeditionConfig.Obstacles OBSTACLES = obstacles(2, 15, 15, 20);
+
+    static ExpeditionConfig.Obstacles obstacles(int spots, int barricade, int monster, int guardian) {
+        return new ExpeditionConfig.Obstacles() {
+            public int spots() {
+                return spots;
+            }
+
+            public int barricadeChance() {
+                return barricade;
+            }
+
+            public int monsterChance() {
+                return monster;
+            }
+
+            public int guardianChance() {
+                return guardian;
+            }
+        };
+    }
+
+    static ExpeditionConfig config(ExpeditionConfig.Obstacles obstacles) {
         return new ExpeditionConfig() {
+            public Obstacles obstacles() {
+                return obstacles;
+            }
+
             public int gridSize() {
                 return 18;
             }

@@ -9,7 +9,8 @@ engine:
     unknown-user-ttl-seconds: 60
     # number of item sprites in the Unity client (ItemManager.sprites in the MainMenu scene);
     # generated items get a graphics id in [0, graphics-count)
-    graphics-count: 181
+    # the 181 sprites of the sheet, then 16 skins for each of the 9 kinds of equipment (ItemArt.cs in the client)
+    graphics-count: 325
     # how many item ids are reserved at once from the database sequence (items_id_seq): generated items get their
     # final id right away; the unused ones wait in Redis (treasure_inc.items_id_pool) for the next generations
     id-block-size: 100
@@ -37,6 +38,15 @@ engine:
     # experience of the character leading an expedition = floors * xp-per-floor * location level * (1 + rarity / 4);
     # the levels themselves are in Leveling
     xp-per-floor: 10
+    # what may stand in the way on each floor (see ExpeditionRun); the chances are in percent
+    obstacles:
+      # how many spots of a floor may hold an obstacle
+      spots: 2
+      # chance that a spot holds a barricade (it only takes time), or a monster (it is fought)
+      barricade-chance: 15
+      monster-chance: 15
+      # chance that the chest of a floor is kept by a monster, which drops it when it dies
+      guardian-chance: 20
     # how long the dug cases of a location are remembered when no expedition is sent there
     dig-ttl: 24h
     # how long the unopened expeditions of a user are kept after the last one was sent
@@ -46,6 +56,14 @@ engine:
       mordak: { level: 1 }
       gardakan: { level: 2 }
       bobafett: { level: 3 }
+  quests:
+    # how many quests of QuestCatalog are drawn for a player each day, and each week (from Monday)
+    daily-count: 3
+    weekly-count: 3
+    # the time zone whose midnight starts a new day
+    zone: Europe/Paris
+    # how long the quests of a player are kept in Redis: longer than a week, so no board is lost while it lasts
+    ttl: 8d
   sync:
     # how often the scheduler looks at the logged users
     check-interval: 30s

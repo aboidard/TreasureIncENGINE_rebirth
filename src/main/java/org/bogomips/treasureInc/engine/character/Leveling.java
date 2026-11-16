@@ -3,6 +3,7 @@ package org.bogomips.treasureInc.engine.character;
 import org.bogomips.treasureInc.engine.character.CharacterCatalog.Info;
 import org.bogomips.treasureInc.engine.item.Equipment;
 
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -70,9 +71,9 @@ public final class Leveling {
      * a character keeps its profile and a stat never goes down from a level to the next one.
      */
     public static Map<String, Object> stats(Info info, int level) {
-        int[] base = {info.strength(), info.constitution(), info.luck()};
+        int[] base = {info.strength(), info.constitution(), info.agility(), info.luck()};
         int[] given = new int[base.length];
-        boolean flat = base[0] <= 0 && base[1] <= 0 && base[2] <= 0;
+        boolean flat = Arrays.stream(base).allMatch(stat -> stat <= 0);
         int points = (Math.max(MIN_LEVEL, Math.min(MAX_LEVEL, level)) - 1) * pointsPerLevel(info.rank());
         for (int p = 0; p < points; p++) {
             int best = 0;
@@ -89,7 +90,8 @@ public final class Leveling {
         Map<String, Object> stats = new LinkedHashMap<>();
         stats.put(Equipment.STRENGTH, base[0] + given[0]);
         stats.put(Equipment.CONSTITUTION, base[1] + given[1]);
-        stats.put(Equipment.LUCK, base[2] + given[2]);
+        stats.put(Equipment.AGILITY, base[2] + given[2]);
+        stats.put(Equipment.LUCK, base[3] + given[3]);
         return stats;
     }
 

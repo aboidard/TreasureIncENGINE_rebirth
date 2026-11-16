@@ -13,6 +13,8 @@ import org.bogomips.treasureInc.engine.item.ItemService;
 import org.bogomips.treasureInc.engine.item.ItemService.ItemList;
 import org.bogomips.treasureInc.engine.item.ItemService.SellResult;
 import org.bogomips.treasureInc.engine.messaging.RequestHandler;
+import org.bogomips.treasureInc.engine.quest.QuestCatalog.Metric;
+import org.bogomips.treasureInc.engine.quest.QuestTracker;
 import org.bogomips.treasureInc.engine.user.UserInfo;
 import org.bogomips.treasureInc.engine.user.UserService;
 import org.bogomips.treasureInc.engine.user.UserService.CachedSession;
@@ -25,6 +27,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -206,7 +209,8 @@ class ExpeditionEndpointsTest {
     };
     private int luckRoll = 99;
     private final ExpeditionEndpoints endpoints = new ExpeditionEndpoints(
-            new ExpeditionService(store, users, items, lock, rules, characters, luck), rules, characters);
+            new ExpeditionService(store, users, items, lock, rules, characters, ExpeditionRulesTest.NO_OBSTACLE, luck),
+            rules, characters);
     private int nextCharacter;
 
     private static String digKey(String location, int caseId) {
@@ -442,7 +446,7 @@ class ExpeditionEndpointsTest {
 
     @Test
     void anExpeditionSentBeforeCharactersExistedKeepsNobodyBusy() throws Exception {
-        stored.put("old", new Expedition("old", "mordak", 1, 0, 2, "t", null, null));
+        stored.put("old", new Expedition("old", "mordak", 1, 0, 2, "t", null, null, null, null, null));
         for (int character = 1; character <= InMemoryCrews.COUNT; character++) {
             assertEquals(200, start("\"location\":\"mordak\",\"difficulty\":1,\"character\":" + character).get("status").asInt());
         }
@@ -514,6 +518,172 @@ class ExpeditionEndpointsTest {
         assertEquals(expected, itemLists.get(PUB).items().size(), "no item from the second opening");
     }
 
+    // ---- obstacles and fights
+
+    /** Endpoints where a monster keeps every chest, and nothing else stands in the way. */
+    private ExpeditionEndpoints guarded() {
+        return new ExpeditionEndpoints(new ExpeditionService(store, users, items, lock, rules, characters,
+                ExpeditionRulesTest.obstacles(2, 0, 0, 100), new Random(11)), rules, characters);
+    }
+
+    private JsonNode startGuarded(String fields) throws Exception {
+        return call(guarded().startExpedition(), "\"private_key\":\"" + PRIV + "\"," + fields);
+    }
+
+    @Test
+    void anExpeditionWithoutObstacleGoesToItsEnd() throws Exception {
+        JsonNode r = start("\"location\":\"bobafett\",\"difficulty\":10,\"character\":2");
+        JsonNode run = r.at("/payload/run");
+        assertEquals(84, run.get("maxHp").asInt(), "Brok: 60 + 8 * 3 of constitution");
+        assertEquals(10, run.get("floorsCompleted").asInt());
+        assertFalse(run.get("dead").asBoolean());
+        assertEquals(10, run.get("floors").size());
+        assertTrue(run.at("/floors/0/encounters").isEmpty());
+
+        Expedition expedition = stored.get(r.at("/payload/expeditionId").asText());
+        assertEquals(10, expedition.floorsCompleted());
+        assertEquals(0, expedition.bonusItems());
+
+        JsonNode opened = open(expedition.id());
+        assertEquals(10, opened.at("/payload/floors").asInt());
+        assertEquals(10, opened.at("/payload/floorsCompleted").asInt());
+    }
+
+    @Test
+    void theReplyTellsTheFightsOfTheExpedition() throws Exception {
+        JsonNode r = startGuarded("\"location\":\"mordak\",\"difficulty\":1,\"character\":1");
+        assertEquals(200, r.get("status").asInt());
+        JsonNode guardian = r.at("/payload/run/floors/0/encounters/0");
+        assertEquals("guardian", guardian.get("type").asText());
+        assertEquals(100, guardian.get("position").asInt());
+        assertTrue(guardian.at("/monster/name").asText().endsWith("gardien du coffre"));
+        assertEquals(guardian.at("/monster/hp").asInt(), guardian.get("hp").asInt());
+        assertTrue(guardian.at("/monster/attack").asInt() > 0);
+        assertFalse(guardian.at("/monster/kind").asText().isEmpty());
+
+        JsonNode fight = guardian.get("fight");
+        assertEquals(84, fight.get("hpStart").asInt(), "Kentucky Johanes: 60 + 8 * 3 of constitution");
+        assertEquals(fight.get("duration").asInt(), guardian.get("duration").asInt());
+        JsonNode events = fight.get("events");
+        assertTrue(events.size() > 1);
+        JsonNode last = events.get(events.size() - 1);
+        assertEquals(fight.get("win").asBoolean() ? 0 : last.get("monsterHp").asInt(), last.get("monsterHp").asInt());
+        for (JsonNode event : events) {
+            assertEquals("hit", event.get("type").asText(), "Kentucky has no skill");
+            assertTrue(Set.of("c", "m").contains(event.get("by").asText()));
+            assertTrue(event.get("amount").asInt() > 0);
+            assertTrue(event.has("hp") && event.has("monsterHp") && event.has("t"));
+        }
+    }
+
+    @Test
+    void aCharacterThatDiesBringsBackWhatItFoundBefore() throws Exception {
+        // Brok cannot go through ten guardians of Bobafett: he dies on the way
+        JsonNode r = startGuarded("\"location\":\"bobafett\",\"difficulty\":10,\"character\":2");
+        JsonNode run = r.at("/payload/run");
+        assertTrue(run.get("dead").asBoolean());
+        int completed = run.get("floorsCompleted").asInt();
+        assertTrue(completed < 10);
+        assertEquals(completed + 1, run.get("floors").size());
+        assertEquals(0, run.at("/floors/" + completed + "/hpEnd").asInt());
+        // 10 floors * (0.5 + 0.25 * 3): 13 items for the whole expedition; 10 * 10 * 3 points of experience
+        assertEquals(13, r.at("/payload/itemCount").asInt());
+        assertEquals(300 * completed / 10, r.at("/payload/xp").asInt());
+        assertEquals(START_MONEY - 3000, money(), "the expedition is paid in full");
+
+        Expedition expedition = stored.get(r.at("/payload/expeditionId").asText());
+        assertEquals(completed, expedition.floorsCompleted());
+
+        JsonNode opened = open(expedition.id());
+        assertEquals(200, opened.get("status").asInt());
+        assertEquals(13 * completed / 10, opened.at("/payload/items").size());
+        assertEquals(300 * completed / 10, opened.at("/payload/xp/gained").asInt());
+        assertEquals(10, opened.at("/payload/floors").asInt());
+        assertEquals(completed, opened.at("/payload/floorsCompleted").asInt());
+        assertTrue(stored.isEmpty(), "the character is back, dead or not");
+    }
+
+    @Test
+    void aCharacterThatDiesOnTheFirstFloorBringsBackNothing() throws Exception {
+        wearLuckCharms();
+        luckRoll = 0;
+        stored.put("lost", new Expedition("lost", "bobafett", 10, 0, 13, "t", 1, 0, 0, 0, null));
+
+        JsonNode opened = open("lost");
+        assertEquals(200, opened.get("status").asInt());
+        assertTrue(opened.at("/payload/items").isEmpty(), "not even the items of the luck charms");
+        assertEquals(0, opened.at("/payload/xp/gained").asInt());
+        assertEquals(0, opened.at("/payload/floorsCompleted").asInt());
+    }
+
+    @Test
+    void theItemsOfTheSkillsAreAddedToTheChest() throws Exception {
+        stored.put("looted", new Expedition("looted", "mordak", 4, 0, 3, "t", 1, 40, 2, 2, null));
+        // half of the 3 items of the 4 floors, rounded down, and the 2 items of the skills
+        assertEquals(3, open("looted").at("/payload/items").size());
+    }
+
+    // ---- quests
+
+    @Test
+    void theQuestsCountADigAndWhatAnOpenedChestBrings() throws Exception {
+        List<Map<Metric, Integer>> counted = new ArrayList<>();
+        QuestTracker tracker = (publicKey, amounts) -> {
+            assertEquals(PUB, publicKey);
+            counted.add(amounts);
+            return Uni.createFrom().voidItem();
+        };
+        // a monster keeps every chest, and nothing else stands in the way
+        ExpeditionEndpoints tracked = new ExpeditionEndpoints(new ExpeditionService(store, users, items, lock, rules,
+                characters, ExpeditionRulesTest.obstacles(2, 0, 0, 100), new Random(11), tracker), rules, characters);
+        String key = "\"private_key\":\"" + PRIV + "\",";
+
+        call(tracked.digCase(), key + "\"location\":\"mordak\",\"case_id\":3,\"cost\":500");
+        call(tracked.digCase(), key + "\"location\":\"mordak\",\"case_id\":3,\"cost\":500");
+        assertEquals(List.of(Map.of(Metric.DIGS, 1)), counted, "digging the same case again counts for nothing");
+        counted.clear();
+
+        JsonNode sent = call(tracked.startExpedition(),
+                key + "\"location\":\"mordak\",\"difficulty\":2,\"character\":1");
+        assertTrue(counted.isEmpty(), "an expedition only counts once its chest is opened");
+        int completed = sent.at("/payload/run/floorsCompleted").asInt();
+        int fights = 0;
+        for (JsonNode floor : sent.at("/payload/run/floors")) {
+            fights += floor.get("encounters").size();
+        }
+        assertTrue(fights > 0);
+
+        JsonNode opened = call(tracked.generateItemsForUser(),
+                key + "\"expedition_id\":\"" + sent.at("/payload/expeditionId").asText() + "\"");
+        assertEquals(1, counted.size());
+        Map<Metric, Integer> amounts = counted.get(0);
+        assertEquals(1, amounts.get(Metric.EXPEDITIONS));
+        assertEquals(completed, amounts.get(Metric.FLOORS));
+        assertEquals(completed == 2 ? 1 : 0, amounts.get(Metric.CLEARS));
+        assertEquals(fights, amounts.get(Metric.MONSTERS));
+        assertEquals(opened.at("/payload/items").size(), amounts.get(Metric.ITEMS));
+        assertEquals(0, amounts.get(Metric.EQUIPMENT));
+    }
+
+    @Test
+    void theEquipmentOfTheCharacterFightsWithIt() throws Exception {
+        itemLists.put(PUB, new ItemList(true, List.of(
+                new ItemInfo(1, "épée épique", "d", 91, 10, "epic", "t", "t", null,
+                        Map.of("slot", 3, "for", 30, "spe1", "ambush")),
+                new ItemInfo(2, "armure épique", "d", 126, 10, "epic", "t", "t", null,
+                        Map.of("slot", 2, "con", 30, "spe1", "tough")))));
+        assertEquals(CharacterService.Status.OK, characters.equip(PUB, PRIV, 1, 3, 1).await().indefinitely().status());
+        assertEquals(CharacterService.Status.OK, characters.equip(PUB, PRIV, 1, 2, 2).await().indefinitely().status());
+
+        JsonNode r = startGuarded("\"location\":\"mordak\",\"difficulty\":1,\"character\":1");
+        // (60 + 8 * 33) * 1.2
+        assertEquals(389, r.at("/payload/run/maxHp").asInt());
+        JsonNode first = r.at("/payload/run/floors/0/encounters/0/fight/events/0");
+        assertEquals("ambush", first.get("skill").asText());
+        assertEquals(0, first.get("t").asInt());
+        assertTrue(r.at("/payload/run/floors/0/encounters/0/fight/win").asBoolean());
+    }
+
     // ---- experience
 
     @Test
@@ -531,8 +701,8 @@ class ExpeditionEndpointsTest {
         assertEquals(50, xp.get("xp").asInt());
         assertEquals(200, xp.get("xpNext").asInt());
         // Brok, rank D: one point at each level, for his best stat
-        assertEquals("{\"for\":2,\"con\":3,\"luk\":1}", xp.get("statsBefore").toString());
-        assertEquals("{\"for\":2,\"con\":4,\"luk\":1}", xp.get("stats").toString());
+        assertEquals("{\"for\":2,\"con\":3,\"agi\":1,\"luk\":1}", xp.get("statsBefore").toString());
+        assertEquals("{\"for\":2,\"con\":4,\"agi\":1,\"luk\":1}", xp.get("stats").toString());
 
         assertEquals(150, crews.cache.get(PUB).xp(2));
         assertEquals(0, crews.cache.get(PUB).xp(1), "the others earn nothing");
@@ -576,7 +746,7 @@ class ExpeditionEndpointsTest {
 
     @Test
     void anExpeditionWithoutCharacterGivesNoExperience() throws Exception {
-        stored.put("old", new Expedition("old", "mordak", 1, 0, 2, "t", null, null));
+        stored.put("old", new Expedition("old", "mordak", 1, 0, 2, "t", null, null, null, null, null));
         JsonNode r = open("old");
         assertEquals(200, r.get("status").asInt());
         assertTrue(r.at("/payload/xp").isNull());
@@ -584,7 +754,7 @@ class ExpeditionEndpointsTest {
 
     @Test
     void anExpeditionSentBeforeTheLevelsGivesTheExperienceOfItsFloors() throws Exception {
-        stored.put("old", new Expedition("old", "gardakan", 3, 4, 2, "t", 1, null));
+        stored.put("old", new Expedition("old", "gardakan", 3, 4, 2, "t", 1, null, null, null, null));
         // 3 floors * 10 * level 2 * (1 + 4 / 4)
         assertEquals(120, open("old").at("/payload/xp/gained").asInt());
     }

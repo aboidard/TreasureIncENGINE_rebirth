@@ -10,17 +10,24 @@ import org.bogomips.treasureInc.engine.item.Equipment;
 import org.bogomips.treasureInc.engine.item.Equipment.Skill;
 import org.bogomips.treasureInc.engine.item.ItemInfo;
 import org.bogomips.treasureInc.engine.item.ItemService;
+import org.bogomips.treasureInc.engine.quest.QuestCatalog.Metric;
+import org.bogomips.treasureInc.engine.quest.QuestTracker;
 import org.bogomips.treasureInc.engine.user.UserService;
 import org.bogomips.treasureInc.engine.user.UserService.SpendResult;
 
 import java.time.Instant;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.random.RandomGenerator;
 
-/** Digging the cases of a location, sending an expedition and opening its chest. Each runs under the user's lock. */
+/**
+ * Digging the cases of a location, sending an expedition and opening its chest. Each runs under the user's lock.
+ * What happens to the character on the way (obstacles, fights) is decided when the expedition is sent, see
+ * {@link ExpeditionRun}.
+ */
 @ApplicationScoped
 class ExpeditionService {
 
@@ -34,16 +41,32 @@ class ExpeditionService {
     private final UserService.Lock lock;
     private final ExpeditionRules rules;
     private final CharacterService characters;
+    private final ExpeditionConfig.Obstacles obstacles;
     private final RandomGenerator random;
+    private final QuestTracker quests;
 
     @Inject
     ExpeditionService(Store store, UserService users, ItemService items, UserService.Lock lock, ExpeditionRules rules,
-                      CharacterService characters) {
-        this(store, users, items, lock, rules, characters, RandomGenerator.getDefault());
+                      CharacterService characters, ExpeditionConfig config, QuestTracker quests) {
+        this(store, users, items, lock, rules, characters, config.obstacles(), RandomGenerator.getDefault(), quests);
+    }
+
+    /** An expedition service that counts nothing for the quests. */
+    ExpeditionService(Store store, UserService users, ItemService items, UserService.Lock lock, ExpeditionRules rules,
+                      CharacterService characters, ExpeditionConfig.Obstacles obstacles, RandomGenerator random) {
+        this(store, users, items, lock, rules, characters, obstacles, random, QuestTracker.NONE);
     }
 
     ExpeditionService(Store store, UserService users, ItemService items, UserService.Lock lock, ExpeditionRules rules,
-                      CharacterService characters, RandomGenerator random) {
+                      CharacterService characters, ExpeditionConfig.Obstacles obstacles, RandomGenerator random,
+                      QuestTracker quests) {
+        this.quests = quests;
+        if (obstacles.spots() < 0 || obstacles.barricadeChance() < 0 || obstacles.monsterChance() < 0
+                || obstacles.barricadeChance() + obstacles.monsterChance() > 100) {
+            throw new IllegalArgumentException("engine.expeditions.obstacles: the chances of a barricade and of a "
+                    + "monster must be positive and at most 100 together");
+        }
+        this.obstacles = obstacles;
         this.characters = characters;
         this.random = random;
         this.store = store;
@@ -81,6 +104,7 @@ class ExpeditionService {
             }
             int rarity = ExpeditionRules.rarityFromRoll(random.nextInt(RARITY_ROLLS) + 1);
             return store.putDug(publicKey, location, caseId, rarity)
+                    .flatMap(v -> quests.addLocked(publicKey, Map.of(Metric.DIGS, 1)))
                     .replaceWith(DigResult.of(SpendResult.Status.OK, rarity, spent.money()));
         });
     }
@@ -98,15 +122,15 @@ class ExpeditionService {
             if (busyCharacters(underWay).containsKey(character)) {
                 // the credentials are still checked first, so a busy character tells nothing to a stranger
                 return users.openSession(publicKey, privateKey).map(user -> user == null
-                        ? new StartResult(SpendResult.Status.UNAUTHORIZED, null, 0, false, false)
-                        : new StartResult(SpendResult.Status.OK, null, user.money(), true, false));
+                        ? StartResult.refused(SpendResult.Status.UNAUTHORIZED, 0, false, false)
+                        : StartResult.refused(SpendResult.Status.OK, user.money(), true, false));
             }
             return characters.ownsLocked(publicKey, character).flatMap(owned -> owned
                     ? send(publicKey, privateKey, location, difficulty, caseId, character)
                     // same as above: only the user learns which characters it has
                     : users.openSession(publicKey, privateKey).map(user -> user == null
-                            ? new StartResult(SpendResult.Status.UNAUTHORIZED, null, 0, false, false)
-                            : new StartResult(SpendResult.Status.OK, null, user.money(), false, true)));
+                            ? StartResult.refused(SpendResult.Status.UNAUTHORIZED, 0, false, false)
+                            : StartResult.refused(SpendResult.Status.OK, user.money(), false, true)));
         }));
     }
 
@@ -117,14 +141,23 @@ class ExpeditionService {
             int rarity = known == null ? NO_RARITY : known;
             return users.spendLocked(publicKey, privateKey, rules.cost(location, difficulty)).flatMap(spent -> {
                 if (spent.status() != SpendResult.Status.OK) {
-                    return Uni.createFrom().item(new StartResult(spent.status(), null, spent.money(), false, false));
+                    return Uni.createFrom().item(StartResult.refused(spent.status(), spent.money(), false, false));
                 }
-                Expedition expedition = new Expedition(UUID.randomUUID().toString(), location, difficulty, rarity,
-                        rules.itemCount(location, difficulty, rarity), Instant.now().toString(), character,
-                        rules.xp(location, difficulty, rarity));
-                return store.put(publicKey, expedition)
-                        .flatMap(v -> store.clearDug(publicKey, location))
-                        .replaceWith(new StartResult(SpendResult.Status.OK, expedition, spent.money(), false, false));
+                // the character fights as it is now: its equipment cannot change before it is back
+                return characters.fighterLocked(publicKey, character).flatMap(fighter -> {
+                    ExpeditionRun run = ExpeditionRun.plan(fighter, rules.level(location), difficulty, obstacles,
+                            random);
+                    Expedition expedition = new Expedition(UUID.randomUUID().toString(), location, difficulty,
+                            rarity, rules.itemCount(location, difficulty, rarity), Instant.now().toString(),
+                            character,
+                            ExpeditionRules.share(rules.xp(location, difficulty, rarity), run.floorsCompleted(),
+                                    difficulty),
+                            run.floorsCompleted(), run.bonusItems(), run.monstersFought());
+                    return store.put(publicKey, expedition)
+                            .flatMap(v -> store.clearDug(publicKey, location))
+                            .replaceWith(new StartResult(SpendResult.Status.OK, expedition, spent.money(), false,
+                                    false, run));
+                });
             });
         });
     }
@@ -133,6 +166,8 @@ class ExpeditionService {
      * Generates the items of the expedition's chest; the expedition is removed, so a chest only opens once and its
      * character is available again. Each "luck_charm" item worn by the character may add one item to the chest.
      * The character earns the experience points of the expedition.
+     * An expedition whose character died on the way only brings back the share of the floors it finished, of the
+     * items as of the experience: nothing at all when it died on the first floor.
      */
     Uni<OpenResult> open(String publicKey, String privateKey, String expeditionId) {
         return lock.withLock(publicKey, () -> users.openSession(publicKey, privateKey).flatMap(user -> {
@@ -143,13 +178,28 @@ class ExpeditionService {
                 if (expedition == null) {
                     return Uni.createFrom().item(OpenResult.of(OpenResult.Status.NOT_FOUND));
                 }
-                return luckyItems(publicKey, expedition).flatMap(bonus ->
-                        items.generateLocked(publicKey, privateKey, expedition.itemCount() + bonus))
+                int found = expedition.itemsFound();
+                // a character that comes back with nothing has no chest for its luck charms to fill
+                Uni<Integer> lucky = found > 0 ? luckyItems(publicKey, expedition) : Uni.createFrom().item(0);
+                return lucky.flatMap(bonus -> items.generateLocked(publicKey, privateKey, found + bonus))
                         .flatMap(generated -> experience(publicKey, expedition)
                                 .flatMap(xp -> store.remove(publicKey, expeditionId)
-                                        .replaceWith(new OpenResult(OpenResult.Status.OK, generated, xp))));
+                                        .flatMap(v -> quests.addLocked(publicKey, questAmounts(expedition, generated)))
+                                        .replaceWith(new OpenResult(OpenResult.Status.OK, generated, xp, expedition))));
             });
         }));
+    }
+
+    /** What an expedition counts for in the quests, once its chest is opened. */
+    private static Map<Metric, Integer> questAmounts(Expedition expedition, List<ItemInfo> found) {
+        Map<Metric, Integer> amounts = new EnumMap<>(Metric.class);
+        amounts.put(Metric.EXPEDITIONS, 1);
+        amounts.put(Metric.FLOORS, expedition.completed());
+        amounts.put(Metric.CLEARS, expedition.completed() == expedition.difficulty() ? 1 : 0);
+        amounts.put(Metric.MONSTERS, expedition.monsters() == null ? 0 : expedition.monsters());
+        amounts.put(Metric.ITEMS, found.size());
+        amounts.put(Metric.EQUIPMENT, (int) found.stream().filter(ItemInfo::equipable).count());
+        return amounts;
     }
 
     /** How many items the luck charms of the expedition's character add to its chest. */
@@ -187,6 +237,10 @@ class ExpeditionService {
      * An expedition on its way: it only lives in Redis, until its chest is opened.
      * character is the number of the character leading it (null for an expedition sent before characters existed).
      * xp is what this character earns when the chest is opened (null for an expedition sent before the levels).
+     * itemCount is the content of the chest of an expedition that goes to its end. floorsCompleted says how many
+     * floors the character finished before it died, or all of them (null for an expedition sent before the fights:
+     * all of them), and bonusItems what its skills add to the chest. monsters is how many monsters it fought
+     * (null for an expedition sent before the quests): the quests count them when the chest is opened.
      */
     record Expedition(
             @JsonProperty("id") String id,
@@ -196,7 +250,20 @@ class ExpeditionService {
             @JsonProperty("itemCount") int itemCount,
             @JsonProperty("createdAt") String createdAt,
             @JsonProperty("character") Integer character,
-            @JsonProperty("xp") Integer xp) {
+            @JsonProperty("xp") Integer xp,
+            @JsonProperty("floorsCompleted") Integer floorsCompleted,
+            @JsonProperty("bonusItems") Integer bonusItems,
+            @JsonProperty("monsters") Integer monsters) {
+
+        /** How many floors the character finished. */
+        int completed() {
+            return floorsCompleted == null ? difficulty : Math.min(difficulty, Math.max(0, floorsCompleted));
+        }
+
+        /** The items the character brings back, before its luck charms. */
+        int itemsFound() {
+            return ExpeditionRules.share(itemCount, completed(), difficulty) + (bonusItems == null ? 0 : bonusItems);
+        }
     }
 
     /**
@@ -214,18 +281,27 @@ class ExpeditionService {
      * Money is the balance afterwards (unchanged unless OK); the expedition is null unless it was sent.
      * characterBusy: nothing was sent because the character is already on an expedition.
      * unknownCharacter: nothing was sent because the user does not have this character.
+     * run is what happens to the character on the way; null unless the expedition was sent.
      */
     record StartResult(SpendResult.Status status, Expedition expedition, int money, boolean characterBusy,
-                       boolean unknownCharacter) {
+                       boolean unknownCharacter, ExpeditionRun run) {
+
+        static StartResult refused(SpendResult.Status status, int money, boolean characterBusy,
+                                   boolean unknownCharacter) {
+            return new StartResult(status, null, money, characterBusy, unknownCharacter, null);
+        }
     }
 
-    /** xp is what the character of the expedition earned; null when nobody led it. */
-    record OpenResult(Status status, List<ItemInfo> items, XpGain xp) {
+    /**
+     * xp is what the character of the expedition earned; null when nobody led it.
+     * expedition is the expedition whose chest was opened; null unless OK.
+     */
+    record OpenResult(Status status, List<ItemInfo> items, XpGain xp, Expedition expedition) {
 
         enum Status { OK, UNAUTHORIZED, NOT_FOUND }
 
         static OpenResult of(Status status) {
-            return new OpenResult(status, List.of(), null);
+            return new OpenResult(status, List.of(), null, null);
         }
     }
 

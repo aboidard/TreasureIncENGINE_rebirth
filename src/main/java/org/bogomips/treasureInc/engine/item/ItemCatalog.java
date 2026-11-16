@@ -215,14 +215,16 @@ class ItemCatalog {
 
     /**
      * An equipment (see {@link Equipment}) gets the name and one of the sprites of its kind, and its stats;
-     * any other item has no stats and any sprite.
+     * any other item has no stats and any sprite of the sheet.
      */
     public ItemInfo generate(int id) {
         Rarity rarity = Rarity.fromRoll(random.nextInt(1000) + 1);
         int price = (random.nextInt(1000) + 1000) * rarity.coef();
         String now = Instant.now().toString();
         if (equipmentKinds.isEmpty() || random.nextDouble() * 100 >= equipableChance) {
-            return new ItemInfo(id, itemName(nouns(rarity), rarity, random), null, random.nextInt(graphicsCount), price,
+            // the sprites after those of the sheet are skins of equipment
+            int sprite = random.nextInt(Math.min(graphicsCount, Equipment.SHEET_SPRITES));
+            return new ItemInfo(id, itemName(nouns(rarity), rarity, random), null, sprite, price,
                     rarity.value(), now, now, randomDescriptionId(rarity, random));
         }
         Kind kind = equipmentKinds.get(random.nextInt(equipmentKinds.size()));

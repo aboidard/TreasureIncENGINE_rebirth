@@ -1,6 +1,7 @@
 package org.bogomips.treasureInc.engine.character;
 
 import org.bogomips.treasureInc.engine.item.Equipment;
+import org.bogomips.treasureInc.engine.item.Equipment.Skill;
 
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -51,8 +52,13 @@ public final class CharacterCatalog {
         }
     }
 
-    /** A character: strength, constitution and luck are its own stats, to which its equipment is added. */
-    public record Info(int num, String name, Rank rank, int strength, int constitution, int luck) {
+    /**
+     * A character: strength, constitution, agility and luck are its own stats, to which its equipment is added.
+     * skills are the skills it has by itself, whatever it wears: none for the weakest ranks, more of them for a
+     * rarer one (see {@link #skillCount}).
+     */
+    public record Info(int num, String name, Rank rank, int strength, int constitution, int agility, int luck,
+                       List<Skill> skills) {
 
         public Map<String, Object> toMap() {
             Map<String, Object> m = new LinkedHashMap<>();
@@ -60,6 +66,7 @@ public final class CharacterCatalog {
             m.put("name", name);
             m.put("rank", rank.name());
             m.put("stats", stats());
+            m.put("skills", skillIds());
             return m;
         }
 
@@ -68,9 +75,19 @@ public final class CharacterCatalog {
             Map<String, Object> stats = new LinkedHashMap<>();
             stats.put(Equipment.STRENGTH, strength);
             stats.put(Equipment.CONSTITUTION, constitution);
+            stats.put(Equipment.AGILITY, agility);
             stats.put(Equipment.LUCK, luck);
             return stats;
         }
+
+        public List<String> skillIds() {
+            return skills.stream().map(Skill::id).toList();
+        }
+    }
+
+    /** How many skills a character of this rank has by itself: none for a D or a C, then 1 for a B up to 5 for a SSS. */
+    public static int skillCount(Rank rank) {
+        return Math.max(0, rank.ordinal() - 1);
     }
 
     /** A portal: a draw first rolls a rank, then picks one of the characters of the portal with this rank. */
@@ -91,26 +108,33 @@ public final class CharacterCatalog {
 
     /** The first three are the characters every user starts with (engine.characters.count). */
     private static final List<Info> ALL = List.of(
-            new Info(1, "Kentucky Johanes", Rank.C, 4, 3, 3),
-            new Info(2, "Brok le quartier-maître", Rank.D, 2, 3, 1),
-            new Info(3, "Vax le caporal", Rank.D, 3, 2, 1),
-            new Info(4, "Gédéon le stagiaire", Rank.D, 1, 1, 4),
-            new Info(5, "Mireille la comptable", Rank.D, 1, 2, 3),
-            new Info(6, "Bébert le porteur", Rank.D, 2, 4, 0),
-            new Info(7, "Olga la cartographe", Rank.C, 2, 3, 5),
-            new Info(8, "Sergent Pépin", Rank.C, 5, 4, 1),
-            new Info(9, "Lulu la crocheteuse", Rank.C, 3, 2, 5),
-            new Info(10, "Fernand le sourcier", Rank.C, 2, 2, 6),
-            new Info(11, "Capitaine Morgane", Rank.B, 7, 5, 4),
-            new Info(12, "Zeph l'artificier", Rank.B, 9, 3, 4),
-            new Info(13, "Sœur Baluchon", Rank.B, 3, 8, 5),
-            new Info(14, "Igor le démineur", Rank.B, 5, 9, 2),
-            new Info(15, "Dame Isolde la sabreuse", Rank.A, 13, 7, 4),
-            new Info(16, "Professeur Tournepierre", Rank.A, 5, 6, 13),
-            new Info(17, "Rakham le Vieux", Rank.A, 8, 11, 5),
-            new Info(18, "Athéna Vif-Argent", Rank.S, 15, 10, 11),
-            new Info(19, "Baron Minuit", Rank.SS, 18, 16, 16),
-            new Info(20, "L'Oracle aux Mille Clés", Rank.SSS, 22, 22, 26));
+            character(1, "Kentucky Johanes", Rank.C, 4, 3, 3, 3),
+            character(2, "Brok le quartier-maître", Rank.D, 2, 3, 1, 1),
+            character(3, "Vax le caporal", Rank.D, 3, 2, 2, 1),
+            character(4, "Gédéon le stagiaire", Rank.D, 1, 1, 2, 4),
+            character(5, "Mireille la comptable", Rank.D, 1, 2, 1, 3),
+            character(6, "Bébert le porteur", Rank.D, 2, 4, 1, 0),
+            character(7, "Olga la cartographe", Rank.C, 2, 3, 3, 5),
+            character(8, "Sergent Pépin", Rank.C, 5, 4, 2, 1),
+            character(9, "Lulu la crocheteuse", Rank.C, 3, 2, 5, 5),
+            character(10, "Fernand le sourcier", Rank.C, 2, 2, 2, 6),
+            character(11, "Capitaine Morgane", Rank.B, 7, 5, 4, 4, Skill.WAR_CRY),
+            character(12, "Zeph l'artificier", Rank.B, 9, 3, 3, 4, Skill.DEMOLISHER),
+            character(13, "Sœur Baluchon", Rank.B, 3, 8, 2, 5, Skill.REGENERATION),
+            character(14, "Igor le démineur", Rank.B, 5, 9, 2, 2, Skill.THICK_SKIN),
+            character(15, "Dame Isolde la sabreuse", Rank.A, 13, 7, 8, 4, Skill.DOUBLE_STRIKE, Skill.SHARP),
+            character(16, "Professeur Tournepierre", Rank.A, 5, 6, 5, 13, Skill.LOOTER, Skill.KEEN_EYE),
+            character(17, "Rakham le Vieux", Rank.A, 8, 11, 4, 5, Skill.ENGAGEMENT, Skill.TOUGH),
+            character(18, "Athéna Vif-Argent", Rank.S, 15, 10, 14, 11, Skill.AMBUSH, Skill.SWIFT, Skill.DODGE),
+            character(19, "Baron Minuit", Rank.SS, 18, 16, 12, 16,
+                    Skill.DRAIN, Skill.POISON, Skill.FINISH_HIM, Skill.KEEN_EYE),
+            character(20, "L'Oracle aux Mille Clés", Rank.SSS, 22, 22, 18, 26,
+                    Skill.LAST_STAND, Skill.SECOND_WIND, Skill.RIPOSTE, Skill.REGENERATION, Skill.LOOTER));
+
+    private static Info character(int num, String name, Rank rank, int strength, int constitution, int agility,
+                                  int luck, Skill... skills) {
+        return new Info(num, name, rank, strength, constitution, agility, luck, List.of(skills));
+    }
 
     private static final List<Portal> PORTALS = List.of(
             new Portal("masterpack1", "Masterpack vol. 1", ALL));
@@ -121,6 +145,10 @@ public final class CharacterCatalog {
             if (ALL.get(i).num() != i + 1) {
                 throw new IllegalStateException("Characters must be numbered from 1 without a gap: see number "
                         + ALL.get(i).num());
+            }
+            if (ALL.get(i).skills().size() != skillCount(ALL.get(i).rank())) {
+                throw new IllegalStateException(ALL.get(i).name() + " must have " + skillCount(ALL.get(i).rank())
+                        + " skills, as every " + ALL.get(i).rank());
             }
         }
     }
