@@ -62,14 +62,14 @@ class ExpeditionService {
             if (user == null) {
                 return Uni.createFrom().item(DigResult.of(SpendResult.Status.UNAUTHORIZED, NO_RARITY, 0));
             }
-            return store.list(publicKey).flatMap(underWay -> {
-                if (busyCharacters(underWay).size() >= characters.count()) {
+            return store.list(publicKey).flatMap(underWay -> characters.countLocked(publicKey).flatMap(owned -> {
+                if (busyCharacters(underWay).size() >= owned) {
                     return Uni.createFrom().item(new DigResult(SpendResult.Status.OK, NO_RARITY, user.money(), true));
                 }
                 return store.dugRarity(publicKey, location, caseId).flatMap(known -> known != null
                         ? Uni.createFrom().item(DigResult.of(SpendResult.Status.OK, known, user.money()))
                         : digNewCase(publicKey, privateKey, location, caseId, cost));
-            });
+            }));
         }));
     }
 
@@ -89,7 +89,7 @@ class ExpeditionService {
      * The character leading it is busy until the chest is opened: it cannot lead another expedition meanwhile.
      *
      * @param caseId    the selected case, or null; a case that was not dug counts as no case
-     * @param character number of the character leading the expedition
+     * @param character number of the character leading the expedition: one the user has
      */
     Uni<StartResult> start(String publicKey, String privateKey, String location, int difficulty, Integer caseId,
                            int character) {
@@ -97,24 +97,34 @@ class ExpeditionService {
             if (busyCharacters(underWay).containsKey(character)) {
                 // the credentials are still checked first, so a busy character tells nothing to a stranger
                 return users.openSession(publicKey, privateKey).map(user -> user == null
-                        ? new StartResult(SpendResult.Status.UNAUTHORIZED, null, 0, false)
-                        : new StartResult(SpendResult.Status.OK, null, user.money(), true));
+                        ? new StartResult(SpendResult.Status.UNAUTHORIZED, null, 0, false, false)
+                        : new StartResult(SpendResult.Status.OK, null, user.money(), true, false));
             }
-            Uni<Integer> dug = caseId == null ? Uni.createFrom().nullItem() : store.dugRarity(publicKey, location, caseId);
-            return dug.flatMap(known -> {
-                int rarity = known == null ? NO_RARITY : known;
-                return users.spendLocked(publicKey, privateKey, rules.cost(location, difficulty)).flatMap(spent -> {
-                    if (spent.status() != SpendResult.Status.OK) {
-                        return Uni.createFrom().item(new StartResult(spent.status(), null, spent.money(), false));
-                    }
-                    Expedition expedition = new Expedition(UUID.randomUUID().toString(), location, difficulty, rarity,
-                            rules.itemCount(location, difficulty, rarity), Instant.now().toString(), character);
-                    return store.put(publicKey, expedition)
-                            .flatMap(v -> store.clearDug(publicKey, location))
-                            .replaceWith(new StartResult(SpendResult.Status.OK, expedition, spent.money(), false));
-                });
-            });
+            return characters.ownsLocked(publicKey, character).flatMap(owned -> owned
+                    ? send(publicKey, privateKey, location, difficulty, caseId, character)
+                    // same as above: only the user learns which characters it has
+                    : users.openSession(publicKey, privateKey).map(user -> user == null
+                            ? new StartResult(SpendResult.Status.UNAUTHORIZED, null, 0, false, false)
+                            : new StartResult(SpendResult.Status.OK, null, user.money(), false, true)));
         }));
+    }
+
+    private Uni<StartResult> send(String publicKey, String privateKey, String location, int difficulty,
+                                  Integer caseId, int character) {
+        Uni<Integer> dug = caseId == null ? Uni.createFrom().nullItem() : store.dugRarity(publicKey, location, caseId);
+        return dug.flatMap(known -> {
+            int rarity = known == null ? NO_RARITY : known;
+            return users.spendLocked(publicKey, privateKey, rules.cost(location, difficulty)).flatMap(spent -> {
+                if (spent.status() != SpendResult.Status.OK) {
+                    return Uni.createFrom().item(new StartResult(spent.status(), null, spent.money(), false, false));
+                }
+                Expedition expedition = new Expedition(UUID.randomUUID().toString(), location, difficulty, rarity,
+                        rules.itemCount(location, difficulty, rarity), Instant.now().toString(), character);
+                return store.put(publicKey, expedition)
+                        .flatMap(v -> store.clearDug(publicKey, location))
+                        .replaceWith(new StartResult(SpendResult.Status.OK, expedition, spent.money(), false, false));
+            });
+        });
     }
 
     /**
@@ -186,8 +196,10 @@ class ExpeditionService {
     /**
      * Money is the balance afterwards (unchanged unless OK); the expedition is null unless it was sent.
      * characterBusy: nothing was sent because the character is already on an expedition.
+     * unknownCharacter: nothing was sent because the user does not have this character.
      */
-    record StartResult(SpendResult.Status status, Expedition expedition, int money, boolean characterBusy) {
+    record StartResult(SpendResult.Status status, Expedition expedition, int money, boolean characterBusy,
+                       boolean unknownCharacter) {
     }
 
     record OpenResult(Status status, List<ItemInfo> items) {

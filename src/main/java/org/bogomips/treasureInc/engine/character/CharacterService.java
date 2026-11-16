@@ -14,10 +14,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.function.Function;
 
 /**
- * The characters of a user and their equipment. An equipped item stays an item of the user, but it leaves the
+ * The characters of a user (see {@link CharacterCatalog} for who they are) and their equipment. An equipped item stays an item of the user, but it leaves the
  * inventory (see {@link ItemService#page}) until it is taken off. Every change is made in Redis under the user's
  * lock; the database is written by the next synchronization.
  */
@@ -39,13 +40,19 @@ public class CharacterService {
         this.activity = activity;
     }
 
-    /** Character numbers go from 1 to the number of characters of a user. */
+    /** Whether a character has this number; a user only has some of them (see {@link #ownsLocked}). */
     public boolean isValid(int num) {
-        return num >= 1 && num <= crews.count();
+        return CharacterCatalog.exists(num);
     }
 
-    public int count() {
-        return crews.count();
+    /** Whether the user has this character; false for an unknown user. Call it inside the user's lock. */
+    public Uni<Boolean> ownsLocked(String publicKey, int num) {
+        return crews.get(publicKey).map(crew -> crew != null && crew.owns(num));
+    }
+
+    /** How many characters the user has. Call it inside the user's lock, for a logged user. */
+    public Uni<Integer> countLocked(String publicKey) {
+        return crews.get(publicKey).map(crew -> crew == null ? 0 : crew.characters().size());
     }
 
     /** Every character of the user, with what it wears and the expedition it is on. */
@@ -96,7 +103,9 @@ public class CharacterService {
                 if (busy.containsKey(num)) {
                     return Uni.createFrom().item(Result.of(Status.BUSY));
                 }
-                return crews.get(publicKey).flatMap(crew -> decide.apply(crew).flatMap(change -> {
+                return crews.get(publicKey).flatMap(crew -> !crew.owns(num)
+                        ? Uni.createFrom().item(Result.of(Status.UNKNOWN_CHARACTER))
+                        : decide.apply(crew).flatMap(change -> {
                     if (change.status() != Status.OK) {
                         return Uni.createFrom().item(Result.of(change.status()));
                     }
@@ -109,10 +118,19 @@ public class CharacterService {
     }
 
     private Uni<Result> views(String publicKey, Crew crew) {
+        return viewsLocked(publicKey, crew);
+    }
+
+    /** Every character of the crew, by number. Call it inside the user's lock. */
+    Uni<Result> viewsLocked(String publicKey, Crew crew) {
         return items.list(publicKey).flatMap(list -> activity.expeditionsByCharacter(publicKey).map(busy -> {
             List<CharacterView> views = new ArrayList<>();
-            for (int num = 1; num <= crews.count(); num++) {
-                views.add(new CharacterView(num, busy.get(num), worn(crew.equipment(num), list.items())));
+            for (int num : new TreeSet<>(crew.characters().keySet())) {
+                CharacterCatalog.Info info = CharacterCatalog.get(num);
+                if (info != null) {
+                    views.add(new CharacterView(info, crew.copies(num), busy.get(num),
+                            worn(crew.equipment(num), list.items())));
+                }
             }
             return new Result(Status.OK, views);
         }));
@@ -134,16 +152,25 @@ public class CharacterService {
 
     // ---- values
 
-    public enum Status { OK, UNAUTHORIZED, NOT_FOUND, WRONG_SLOT, BUSY }
+    /** NOT_FOUND is about the item; UNKNOWN_CHARACTER is a character the user does not have. */
+    public enum Status { OK, UNAUTHORIZED, NOT_FOUND, WRONG_SLOT, BUSY, UNKNOWN_CHARACTER }
 
-    /** A character as shown to the client; expeditionId is null unless the character is on an expedition. */
-    public record CharacterView(int num, String expeditionId, Map<Integer, ItemInfo> equipment) {
+    /**
+     * A character of a user as shown to the client: who it is, how many times the user obtained it, and what it
+     * wears; expeditionId is null unless the character is on an expedition.
+     */
+    public record CharacterView(CharacterCatalog.Info info, int copies, String expeditionId,
+                                Map<Integer, ItemInfo> equipment) {
+
+        public int num() {
+            return info.num();
+        }
 
         public Map<String, Object> toMap() {
             Map<String, Object> worn = new TreeMap<>();
             equipment.forEach((slot, item) -> worn.put(String.valueOf(slot), item.toMap()));
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("num", num);
+            Map<String, Object> m = new LinkedHashMap<>(info.toMap());
+            m.put("copies", copies);
             m.put("expeditionId", expeditionId);
             m.put("equipment", worn);
             return m;

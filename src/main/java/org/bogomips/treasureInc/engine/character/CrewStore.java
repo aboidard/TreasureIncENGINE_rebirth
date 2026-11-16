@@ -12,7 +12,8 @@ import java.util.TreeMap;
 import java.util.stream.Collectors;
 
 /**
- * The characters of the users and what they wear, served from Redis and read from the database on a miss.
+ * The characters of the users (those they start with and those they recruited) and what they wear, served from
+ * Redis and read from the database on a miss.
  * A change is only written to Redis; {@link #sync} writes it to the database later (see CacheSyncService).
  * Read-modify-write sequences must run inside the user's lock.
  */
@@ -23,7 +24,7 @@ public class CrewStore implements ItemService.Equipped {
     private final Cache cache;
     private final int count;
 
-    /** @param count how many characters a user has */
+    /** @param count how many characters a user starts with: the characters 1 to count of the catalog */
     public CrewStore(Repository repository, Cache cache,
                      @ConfigProperty(name = "engine.characters.count", defaultValue = "3") int count) {
         if (count < 1) {
@@ -34,7 +35,7 @@ public class CrewStore implements ItemService.Equipped {
         this.count = count;
     }
 
-    /** Character numbers go from 1 to this count. */
+    /** Every user has at least the characters 1 to this count. */
     public int count() {
         return count;
     }
@@ -45,11 +46,11 @@ public class CrewStore implements ItemService.Equipped {
             if (cached != null) {
                 return Uni.createFrom().item(cached);
             }
-            return repository.load(publicKey, count).flatMap(equipment -> {
-                if (equipment == null) {
+            return repository.load(publicKey, count).flatMap(roster -> {
+                if (roster == null) {
                     return Uni.createFrom().nullItem();
                 }
-                Crew crew = new Crew(equipment, false);
+                Crew crew = new Crew(roster.equipment(), roster.copies(), false);
                 return cache.put(publicKey, crew).replaceWith(crew);
             });
         });
@@ -57,7 +58,7 @@ public class CrewStore implements ItemService.Equipped {
 
     /** Stores changed characters in Redis only, flagged for the next synchronization. */
     public Uni<Void> save(String publicKey, Crew crew) {
-        return cache.persist(publicKey, new Crew(crew.characters(), true));
+        return cache.persist(publicKey, new Crew(crew.characters(), crew.copies(), true));
     }
 
     @Override
@@ -72,8 +73,8 @@ public class CrewStore implements ItemService.Equipped {
                 return Uni.createFrom().voidItem();
             }
             // the entry may expire again once the database holds it
-            return repository.save(userId, crew.characters())
-                    .flatMap(v -> cache.put(publicKey, new Crew(crew.characters(), false)));
+            return repository.save(userId, new Roster(crew.characters(), crew.copies()))
+                    .flatMap(v -> cache.put(publicKey, new Crew(crew.characters(), crew.copies(), false)));
         });
     }
 
@@ -84,12 +85,37 @@ public class CrewStore implements ItemService.Equipped {
     // ---- values
 
     /**
-     * The characters of a user as kept in Redis: for each character number, the item id by slot number.
+     * The characters of a user as kept in Redis: for each number of a character the user has, the item id by slot
+     * number. copies says how many times a character was obtained (1 when absent: a character never drawn again).
      * dirty says whether the database is behind.
      */
     public record Crew(
             @JsonProperty("characters") Map<Integer, Map<Integer, Integer>> characters,
+            @JsonProperty("copies") Map<Integer, Integer> copies,
             @JsonProperty("dirty") boolean dirty) {
+
+        public Crew {
+            // an entry cached before the recruitment existed has no copies
+            copies = copies == null ? Map.of() : copies;
+        }
+
+        /** Whether the user has this character. */
+        public boolean owns(int num) {
+            return characters.containsKey(num);
+        }
+
+        public int copies(int num) {
+            return owns(num) ? Math.max(1, copies.getOrDefault(num, 1)) : 0;
+        }
+
+        /** A copy where the character was obtained once more: it joins the crew if the user did not have it. */
+        public Crew withRecruit(int num) {
+            Map<Integer, Map<Integer, Integer>> all = new TreeMap<>(characters);
+            Map<Integer, Integer> counts = new TreeMap<>(copies);
+            counts.put(num, copies(num) + 1);
+            all.putIfAbsent(num, Map.of());
+            return new Crew(all, counts, dirty);
+        }
 
         public Set<Integer> equippedIds() {
             return characters.values().stream().flatMap(e -> e.values().stream()).collect(Collectors.toSet());
@@ -110,21 +136,28 @@ public class CrewStore implements ItemService.Equipped {
             }
             Map<Integer, Map<Integer, Integer>> all = new TreeMap<>(characters);
             all.put(num, equipment);
-            return new Crew(all, dirty);
+            return new Crew(all, copies, dirty);
         }
     }
 
     // ---- ports, implemented by the Panache and Redis adapters
 
+    /**
+     * The characters of a user as kept in the database: the item id by slot and the number of copies, both by
+     * character number. A character without an entry in copies has one copy.
+     */
+    public record Roster(Map<Integer, Map<Integer, Integer>> equipment, Map<Integer, Integer> copies) {
+    }
+
     public interface Repository {
         /**
-         * Item id by slot for each character number in 1..count; the characters the user does not have yet are
-         * created. Null when the public key is unknown.
+         * The characters of the user; those among 1..count the user does not have yet are created.
+         * Null when the public key is unknown.
          */
-        Uni<Map<Integer, Map<Integer, Integer>>> load(String publicKey, int count);
+        Uni<Roster> load(String publicKey, int count);
 
-        /** Writes the equipment of the characters of the user, by character number. */
-        Uni<Void> save(int userId, Map<Integer, Map<Integer, Integer>> equipment);
+        /** Writes the characters of the user, creating those the database does not have yet. */
+        Uni<Void> save(int userId, Roster roster);
     }
 
     public interface Cache {

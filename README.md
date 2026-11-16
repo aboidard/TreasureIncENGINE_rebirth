@@ -52,11 +52,13 @@ Types de requête (`payload.type`) et paramètres (`payload.params`) :
 | `getPrivateItems` | idem + `private_key` | idem · 401 |
 | `sellItems` | `user`, `private_key`, `items: [{id}]` | 200 `{totalPrice, money}` · 401 · 404 |
 | `digCase` | `user`, `private_key`, `location`, `case_id`, `cost` (≥ 0) | 200 `{rarity, money}` · 401 · 402 `{money}` · 409 (plus aucun personnage disponible) |
-| `startExpedition` | `user`, `private_key`, `location`, `difficulty`, `character`, `case_id` (optionnel) | 200 `{expeditionId, character, money, itemCount}` · 401 · 402 `{money}` · 409 (personnage déjà en expédition) |
+| `startExpedition` | `user`, `private_key`, `location`, `difficulty`, `character`, `case_id` (optionnel) | 200 `{expeditionId, character, money, itemCount}` · 401 · 402 `{money}` · 404 (personnage non recruté) · 409 (personnage déjà en expédition) |
 | `generateItemsForUser` | `user`, `private_key`, `expedition_id` | 200 `{items}` · 401 · 404 |
 | `getCharacters` | `user`, `private_key` | 200 `{characters}` · 401 |
-| `equipItem` | `user`, `private_key`, `character`, `slot`, `item` | 200 `{characters}` · 400 (mauvais slot) · 401 · 404 · 409 (personnage en expédition) |
-| `unequipItem` | `user`, `private_key`, `character`, `slot` | 200 `{characters}` · 401 · 409 |
+| `equipItem` | `user`, `private_key`, `character`, `slot`, `item` | 200 `{characters}` · 400 (mauvais slot) · 401 · 404 (objet absent ou personnage non recruté) · 409 (personnage en expédition) |
+| `unequipItem` | `user`, `private_key`, `character`, `slot` | 200 `{characters}` · 401 · 404 · 409 |
+| `getPortals` | — | 200 `{portals: [{id, name, cost, multi, rates, characters}]}` |
+| `recruit` | `user`, `private_key`, `portal`, `count` (1 ou `multi`, 1 par défaut) | 200 `{draws, money, characters}` · 401 · 402 `{money}` · 404 (portail inconnu) |
 | `healthcheck` | — | `{name, status, data, checks: [{name, status}]}` (checks de readiness : base, Redis) |
 
 Un paramètre manquant ou invalide renvoie 400.
@@ -133,8 +135,11 @@ La force, la constitution et la chance sont stockées et affichées ; elles n'on
 Un équipement reçoit le nom et un des sprites de sa famille (`Equipment.Kind`). La valeur de sa caractéristique dépend de sa rareté :
 commun 1-5, peu commun 4-10, rare 8-18, épique 15-30, légendaire 30-50.
 
-**Personnages.** Chaque joueur possède `engine.characters.count` personnages (3), numérotés à partir de 1, dans la table `characters`
-(`user_id`, `num`, `equipment`). La colonne `equipment` (`jsonb`) ne contient que l'id de l'objet par numéro d'emplacement :
+**Personnages.** Les personnages du jeu sont définis dans le moteur (`CharacterCatalog`) : un numéro, un nom, un rang et
+des caractéristiques propres. Chaque joueur commence avec les `engine.characters.count` premiers (3) et recrute les autres
+(voir « Recrutement »). Ses personnages sont dans la table `characters` (`user_id`, `num`, `equipment`, `copies`) : `num` est le
+numéro du personnage dans le catalogue, `copies` le nombre de fois où il a été obtenu.
+La colonne `equipment` (`jsonb`) ne contient que l'id de l'objet par numéro d'emplacement :
 
 ```json
 { "2": 812, "3": 640 }
@@ -144,13 +149,35 @@ commun 1-5, peu commun 4-10, rare 8-18, épique 15-30, légendaire 30-50.
   Le retirer, ou équiper un autre objet au même emplacement, le remet dans l'inventaire.
 - Comme pour le reste, toute modification est faite dans Redis (`treasure_inc.characters.<publicKey>`) sous le verrou du joueur ;
   la synchronisation l'écrit en base plus tard.
-- `getCharacters`, `equipItem` et `unequipItem` répondent avec tous les personnages :
-  `[{num, expeditionId, equipment: {"<slot>": {objet}}}]`.
+- `getCharacters`, `equipItem` et `unequipItem` répondent avec tous les personnages du joueur :
+  `[{num, name, rank, stats: {for, con, luk}, copies, expeditionId, equipment: {"<slot>": {objet}}}]`.
 
 **Personnages et expéditions.** Une expédition est menée par un personnage (`character`), indisponible jusqu'à l'ouverture de son coffre :
 il ne peut ni mener une autre expédition ni changer d'équipement (409). Quand tous les personnages sont partis, plus rien ne peut être creusé ni envoyé.
 
-Le schéma se met à jour avec `src/main/resources/db/update_001_equipment.sql`.
+### Recrutement
+
+Les personnages s'invoquent par des **portails**, sans savoir à l'avance qui sortira. Il n'y en a qu'un pour l'instant,
+`masterpack1` (« Masterpack vol. 1 »), qui contient les 20 personnages du catalogue.
+
+Un tirage coûte `engine.recruitment.cost` (1000) ; `recruit` en fait 1 ou `engine.recruitment.multi` (10) d'un coup.
+Chaque tirage choisit d'abord un **rang** selon la table ci-dessous, puis un personnage du portail au hasard parmi ceux de ce rang.
+
+| Rang | SSS | SS | S | A | B | C | D |
+|---|---|---|---|---|---|---|---|
+| Chance | 0,1 % | 0,9 % | 3 % | 9 % | 17 % | 30 % | 40 % |
+| Personnages du portail | 1 | 1 | 1 | 3 | 4 | 5 | 5 |
+
+- Un personnage que le joueur n'a pas rejoint son équipe : il peut aussitôt être équipé et mener une expédition.
+- Un personnage déjà possédé est un **doublon** : seul son compteur `copies` augmente (sans effet en jeu pour l'instant).
+- `recruit` répond avec les tirages dans l'ordre, `draws: [{num, name, rank, stats, isNew, copies}]`, le nouveau solde et
+  tous les personnages du joueur. Le client s'appuie sur les rangs tirés pour son animation.
+- `getPortals` décrit les portails (prix, table des chances, personnages) : le client n'a aucune de ces valeurs en dur.
+- Il n'y a pas de garantie (« pity ») : chaque tirage est indépendant.
+
+Ajouter un personnage : une ligne dans `CharacterCatalog` (les numéros ne changent jamais) et son portrait dans le client.
+
+Le schéma se met à jour avec `src/main/resources/db/update_001_equipment.sql` puis `update_002_recruitment.sql`.
 
 ### Observabilité
 - Logs structurés `clé=valeur` (lisibles et exploitables dans Kibana), JSON en production, **masquage automatique** des champs sensibles et troncature des charges volumineuses.
@@ -163,7 +190,7 @@ src/main/java/.../engine
 ├── messaging   transport, dispatcher, contrat des handlers, format des réponses
 ├── user        joueurs : service, cache, verrou, persistance, handlers
 ├── item        objets : génération, équipements, cache, persistance, handlers
-├── character   personnages : équipement, cache, persistance, handlers
+├── character   personnages : catalogue, recrutement, équipement, cache, persistance, handlers
 ├── expedition  expéditions : creusage, envoi, coffres, règles, noms générés
 └── sync        synchronisation planifiée cache → base de données
 ```

@@ -77,6 +77,7 @@ class CharacterEndpoints {
         return switch (result.status()) {
             case UNAUTHORIZED -> Protocol.unauthorized();
             case NOT_FOUND -> Protocol.reply(404, "Item not found");
+            case UNKNOWN_CHARACTER -> Protocol.reply(404, "Character not found");
             case WRONG_SLOT -> Protocol.reply(400, "The item does not fit this slot");
             case BUSY -> Protocol.reply(409, "The character is on an expedition");
             case OK -> Protocol.reply(200, "OK",

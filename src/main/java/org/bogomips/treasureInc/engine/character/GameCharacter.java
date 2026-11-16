@@ -27,12 +27,15 @@ public class GameCharacter extends PanacheEntityBase {
     @Column(name = "user_id")
     public Integer userId;
 
-    /** Number of the character for its user, from 1. */
+    /** Number of the character in the catalog (see CharacterCatalog), from 1. */
     public Integer num;
 
     /** Item id by slot number, e.g. {"2": 812, "3": 640}; see Equipment.Slot for the numbers. */
     @JdbcTypeCode(SqlTypes.JSON)
     public Map<String, Integer> equipment;
+
+    /** How many times the user obtained this character: 1, plus one for each duplicate drawn. */
+    public Integer copies;
 
     @Column(name = "createdat")
     public LocalDateTime createdAt;

@@ -199,9 +199,13 @@ class CharacterEndpointsTest {
         assertEquals(3, list.size());
         for (int i = 0; i < 3; i++) {
             assertEquals(i + 1, list.get(i).get("num").asInt());
+            assertEquals(1, list.get(i).get("copies").asInt());
             assertTrue(list.get(i).get("expeditionId").isNull());
             assertTrue(list.get(i).get("equipment").isEmpty());
         }
+        assertEquals("Kentucky Johanes", list.at("/0/name").asText());
+        assertEquals("C", list.at("/0/rank").asText());
+        assertEquals(4, list.at("/0/stats/for").asInt());
         assertEquals(Set.of(1, 2, 3), crews.database.get(PUB).keySet(), "the characters are created in the database");
         assertFalse(sessions.get(PUB).dirty(), "nothing to synchronize");
     }
@@ -307,7 +311,8 @@ class CharacterEndpointsTest {
         assertEquals(400, call(h, PRIV, "\"character\":1,\"item\":" + SWORD).get("status").asInt());
         assertEquals(400, call(h, PRIV, "\"character\":1,\"slot\":3").get("status").asInt());
         assertEquals(400, equip(0, 3, SWORD).get("status").asInt());
-        assertEquals(400, equip(4, 3, SWORD).get("status").asInt());
+        assertEquals(400, equip(21, 3, SWORD).get("status").asInt(), "no such character");
+        assertEquals(404, equip(4, 3, SWORD).get("status").asInt(), "a character the user does not have");
         assertEquals(400, equip(1, 0, SWORD).get("status").asInt());
         assertEquals(400, equip(1, 10, SWORD).get("status").asInt());
         assertEquals(400, call(h, PRIV, "\"character\":\"1\",\"slot\":3,\"item\":" + SWORD).get("status").asInt());
@@ -338,7 +343,8 @@ class CharacterEndpointsTest {
         assertEquals(401, call(h, "bad", "\"character\":1,\"slot\":3").get("status").asInt());
         assertEquals(400, call(h, PRIV, "\"slot\":3").get("status").asInt());
         assertEquals(400, call(h, PRIV, "\"character\":1").get("status").asInt());
-        assertEquals(400, unequip(4, 3).get("status").asInt());
+        assertEquals(400, unequip(21, 3).get("status").asInt());
+        assertEquals(404, unequip(4, 3).get("status").asInt(), "a character the user does not have");
         assertEquals(400, unequip(1, 10).get("status").asInt());
     }
 

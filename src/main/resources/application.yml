@@ -16,10 +16,16 @@ engine:
     # chance, in percent, that a generated item is an equipment (an item with stats, see Equipment)
     equipable-chance: 5
   characters:
-    # how many characters a user has (the crew of TeamPanel in the Unity client)
+    # how many characters a user starts with: the characters 1 to count of CharacterCatalog.
+    # The others are recruited (see recruitment below)
     count: 3
     # how long the characters read from the database stay in Redis; no expiry while a change waits for the sync
     cache-ttl-seconds: 300
+  recruitment:
+    # price of one draw in a portal; the portals, their characters and the rates of the ranks are in CharacterCatalog
+    cost: 1000
+    # how many draws the "several draws at once" request makes
+    multi: 10
   expeditions:
     # number of cases of a location's grid in the Unity client (SendExpeditionPanel.CreateGridLocation)
     grid-size: 18
