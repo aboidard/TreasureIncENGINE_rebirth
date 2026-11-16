@@ -442,7 +442,7 @@ class ExpeditionEndpointsTest {
 
     @Test
     void anExpeditionSentBeforeCharactersExistedKeepsNobodyBusy() throws Exception {
-        stored.put("old", new Expedition("old", "mordak", 1, 0, 2, "t", null));
+        stored.put("old", new Expedition("old", "mordak", 1, 0, 2, "t", null, null));
         for (int character = 1; character <= InMemoryCrews.COUNT; character++) {
             assertEquals(200, start("\"location\":\"mordak\",\"difficulty\":1,\"character\":" + character).get("status").asInt());
         }
@@ -512,6 +512,81 @@ class ExpeditionEndpointsTest {
 
         assertEquals(404, open(id).get("status").asInt());
         assertEquals(expected, itemLists.get(PUB).items().size(), "no item from the second opening");
+    }
+
+    // ---- experience
+
+    @Test
+    void theCharacterOfTheExpeditionEarnsItsExperience() throws Exception {
+        digs.put("gardakan/5", 2);
+        JsonNode sent = start("\"location\":\"gardakan\",\"difficulty\":5,\"case_id\":5,\"character\":2");
+        // 5 floors * 10 * level 2 * (1 + 2 / 4)
+        assertEquals(150, sent.at("/payload/xp").asInt());
+
+        JsonNode xp = open(sent.at("/payload/expeditionId").asText()).at("/payload/xp");
+        assertEquals(2, xp.get("character").asInt());
+        assertEquals(150, xp.get("gained").asInt());
+        assertEquals(1, xp.get("levelBefore").asInt());
+        assertEquals(2, xp.get("level").asInt());
+        assertEquals(50, xp.get("xp").asInt());
+        assertEquals(200, xp.get("xpNext").asInt());
+        // Brok, rank D: one point at each level, for his best stat
+        assertEquals("{\"for\":2,\"con\":3,\"luk\":1}", xp.get("statsBefore").toString());
+        assertEquals("{\"for\":2,\"con\":4,\"luk\":1}", xp.get("stats").toString());
+
+        assertEquals(150, crews.cache.get(PUB).xp(2));
+        assertEquals(0, crews.cache.get(PUB).xp(1), "the others earn nothing");
+        assertTrue(crews.cache.get(PUB).dirty(), "the experience must be written by the next synchronization");
+
+        JsonNode brok = mapper.valueToTree(characters.list(PUB, PRIV).await().indefinitely().characters().get(1).toMap());
+        assertEquals(2, brok.get("level").asInt());
+        assertEquals(50, brok.get("xp").asInt());
+        assertEquals(200, brok.get("xpNext").asInt());
+        assertEquals(4, brok.at("/stats/con").asInt());
+    }
+
+    @Test
+    void experienceAddsUpFromAnExpeditionToTheNext() throws Exception {
+        for (int i = 0; i < 3; i++) {
+            JsonNode sent = start("\"location\":\"mordak\",\"difficulty\":4,\"character\":1");
+            JsonNode xp = open(sent.at("/payload/expeditionId").asText()).at("/payload/xp");
+            assertEquals(40, xp.get("gained").asInt());
+            assertEquals(i < 2 ? 1 : 2, xp.get("level").asInt());
+        }
+        assertEquals(120, crews.cache.get(PUB).xp(1));
+    }
+
+    @Test
+    void aCharacterAtTheHighestLevelEarnsNothing() throws Exception {
+        JsonNode sent = start("\"location\":\"bobafett\",\"difficulty\":10,\"character\":3");
+        crews.cache.put(PUB, crews.cache.get(PUB).withXp(3, 494990));
+
+        JsonNode xp = open(sent.at("/payload/expeditionId").asText()).at("/payload/xp");
+        assertEquals(10, xp.get("gained").asInt(), "only what was left to earn");
+        assertEquals(99, xp.get("levelBefore").asInt());
+        assertEquals(100, xp.get("level").asInt());
+        assertEquals(0, xp.get("xpNext").asInt());
+
+        sent = start("\"location\":\"bobafett\",\"difficulty\":10,\"character\":3");
+        xp = open(sent.at("/payload/expeditionId").asText()).at("/payload/xp");
+        assertEquals(0, xp.get("gained").asInt());
+        assertEquals(100, xp.get("level").asInt());
+        assertEquals(495000, crews.cache.get(PUB).xp(3));
+    }
+
+    @Test
+    void anExpeditionWithoutCharacterGivesNoExperience() throws Exception {
+        stored.put("old", new Expedition("old", "mordak", 1, 0, 2, "t", null, null));
+        JsonNode r = open("old");
+        assertEquals(200, r.get("status").asInt());
+        assertTrue(r.at("/payload/xp").isNull());
+    }
+
+    @Test
+    void anExpeditionSentBeforeTheLevelsGivesTheExperienceOfItsFloors() throws Exception {
+        stored.put("old", new Expedition("old", "gardakan", 3, 4, 2, "t", 1, null));
+        // 3 floors * 10 * level 2 * (1 + 4 / 4)
+        assertEquals(120, open("old").at("/payload/xp/gained").asInt());
     }
 
     @Test

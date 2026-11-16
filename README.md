@@ -52,8 +52,8 @@ Types de requête (`payload.type`) et paramètres (`payload.params`) :
 | `getPrivateItems` | idem + `private_key` | idem · 401 |
 | `sellItems` | `user`, `private_key`, `items: [{id}]` | 200 `{totalPrice, money}` · 401 · 404 |
 | `digCase` | `user`, `private_key`, `location`, `case_id`, `cost` (≥ 0) | 200 `{rarity, money}` · 401 · 402 `{money}` · 409 (plus aucun personnage disponible) |
-| `startExpedition` | `user`, `private_key`, `location`, `difficulty`, `character`, `case_id` (optionnel) | 200 `{expeditionId, character, money, itemCount}` · 401 · 402 `{money}` · 404 (personnage non recruté) · 409 (personnage déjà en expédition) |
-| `generateItemsForUser` | `user`, `private_key`, `expedition_id` | 200 `{items}` · 401 · 404 |
+| `startExpedition` | `user`, `private_key`, `location`, `difficulty`, `character`, `case_id` (optionnel) | 200 `{expeditionId, character, money, itemCount, xp}` · 401 · 402 `{money}` · 404 (personnage non recruté) · 409 (personnage déjà en expédition) |
+| `generateItemsForUser` | `user`, `private_key`, `expedition_id` | 200 `{items, xp}` (voir « Niveaux et expérience ») · 401 · 404 |
 | `getCharacters` | `user`, `private_key` | 200 `{characters}` · 401 |
 | `equipItem` | `user`, `private_key`, `character`, `slot`, `item` | 200 `{characters}` · 400 (mauvais slot) · 401 · 404 (objet absent ou personnage non recruté) · 409 (personnage en expédition) |
 | `unequipItem` | `user`, `private_key`, `character`, `slot` | 200 `{characters}` · 401 · 404 · 409 |
@@ -137,8 +137,8 @@ commun 1-5, peu commun 4-10, rare 8-18, épique 15-30, légendaire 30-50.
 
 **Personnages.** Les personnages du jeu sont définis dans le moteur (`CharacterCatalog`) : un numéro, un nom, un rang et
 des caractéristiques propres. Chaque joueur commence avec les `engine.characters.count` premiers (3) et recrute les autres
-(voir « Recrutement »). Ses personnages sont dans la table `characters` (`user_id`, `num`, `equipment`, `copies`) : `num` est le
-numéro du personnage dans le catalogue, `copies` le nombre de fois où il a été obtenu.
+(voir « Recrutement »). Ses personnages sont dans la table `characters` (`user_id`, `num`, `equipment`, `copies`, `xp`) : `num` est le
+numéro du personnage dans le catalogue, `copies` le nombre de fois où il a été obtenu, `xp` l'expérience qu'il a gagnée.
 La colonne `equipment` (`jsonb`) ne contient que l'id de l'objet par numéro d'emplacement :
 
 ```json
@@ -150,10 +150,38 @@ La colonne `equipment` (`jsonb`) ne contient que l'id de l'objet par numéro d'e
 - Comme pour le reste, toute modification est faite dans Redis (`treasure_inc.characters.<publicKey>`) sous le verrou du joueur ;
   la synchronisation l'écrit en base plus tard.
 - `getCharacters`, `equipItem` et `unequipItem` répondent avec tous les personnages du joueur :
-  `[{num, name, rank, stats: {for, con, luk}, copies, expeditionId, equipment: {"<slot>": {objet}}}]`.
+  `[{num, name, rank, stats: {for, con, luk}, level, xp, xpNext, copies, expeditionId, equipment: {"<slot>": {objet}}}]`.
+  `stats` sont les caractéristiques du personnage à son niveau, sans son équipement.
 
 **Personnages et expéditions.** Une expédition est menée par un personnage (`character`), indisponible jusqu'à l'ouverture de son coffre :
 il ne peut ni mener une autre expédition ni changer d'équipement (409). Quand tous les personnages sont partis, plus rien ne peut être creusé ni envoyé.
+
+### Niveaux et expérience
+
+Chaque personnage a un **niveau**, de 1 à 100, et gagne de l'**expérience** en menant des expéditions. Les règles sont dans `Leveling`.
+
+- **Gain.** À l'ouverture du coffre, le personnage de l'expédition gagne
+  `étages × engine.expeditions.xp-per-floor (10) × niveau du lieu × (1 + 0,25 × rareté)` points (arrondi à l'entier inférieur) :
+  de 10 points pour un étage à Mordak à 600 pour dix étages à Bobafett sur une case légendaire. Le montant est fixé à l'envoi
+  et renvoyé par `startExpedition` (`xp`).
+- **Niveaux.** Passer du niveau `n` au suivant demande `100 × n` points : chaque niveau est plus long que le précédent
+  (100 points pour le niveau 2, 9 900 pour le niveau 100, 495 000 en tout). Au niveau 100 un personnage ne gagne plus rien.
+- **Caractéristiques.** Chaque niveau gagné donne des points de caractéristique, d'autant plus que le rang est élevé :
+  1 pour un D, 2 pour un C, 3 pour un B, 4 pour un A, 5 pour un S, 6 pour un SS, 7 pour un SSS. Ils sont répartis un par un
+  entre la force, la constitution et la chance, en proportion des caractéristiques d'origine du personnage : il garde son profil.
+- **Stockage.** Seul le total des points gagnés est stocké (`characters.xp`, et `xp` dans Redis) : le niveau et les
+  caractéristiques s'en déduisent.
+
+`generateItemsForUser` renvoie, à côté des objets, ce que l'expédition a rapporté à son personnage
+(`null` pour une expédition sans personnage) :
+
+```json
+"xp": { "character": 2, "gained": 150, "levelBefore": 1, "level": 2, "xp": 50, "xpNext": 200,
+        "statsBefore": { "for": 2, "con": 3, "luk": 1 }, "stats": { "for": 2, "con": 4, "luk": 1 } }
+```
+
+`xp` est l'expérience acquise dans le niveau courant et `xpNext` ce que ce niveau demande (0 au niveau 100) ; ce sont les
+mêmes champs que ceux d'un personnage. `gained` est ce qui a réellement été gagné (0 au niveau 100).
 
 ### Recrutement
 
@@ -177,7 +205,7 @@ Chaque tirage choisit d'abord un **rang** selon la table ci-dessous, puis un per
 
 Ajouter un personnage : une ligne dans `CharacterCatalog` (les numéros ne changent jamais) et son portrait dans le client.
 
-Le schéma se met à jour avec `src/main/resources/db/update_001_equipment.sql` puis `update_002_recruitment.sql`.
+Le schéma se met à jour avec `src/main/resources/db/update_001_equipment.sql`, `update_002_recruitment.sql` puis `update_003_xp.sql`.
 
 ### Observabilité
 - Logs structurés `clé=valeur` (lisibles et exploitables dans Kibana), JSON en production, **masquage automatique** des champs sensibles et troncature des charges volumineuses.
@@ -190,7 +218,7 @@ src/main/java/.../engine
 ├── messaging   transport, dispatcher, contrat des handlers, format des réponses
 ├── user        joueurs : service, cache, verrou, persistance, handlers
 ├── item        objets : génération, équipements, cache, persistance, handlers
-├── character   personnages : catalogue, recrutement, équipement, cache, persistance, handlers
+├── character   personnages : catalogue, niveaux, recrutement, équipement, cache, persistance, handlers
 ├── expedition  expéditions : creusage, envoi, coffres, règles, noms générés
 └── sync        synchronisation planifiée cache → base de données
 ```

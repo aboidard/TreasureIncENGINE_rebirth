@@ -50,7 +50,7 @@ public class CrewStore implements ItemService.Equipped {
                 if (roster == null) {
                     return Uni.createFrom().nullItem();
                 }
-                Crew crew = new Crew(roster.equipment(), roster.copies(), false);
+                Crew crew = new Crew(roster.equipment(), roster.copies(), roster.xp(), false);
                 return cache.put(publicKey, crew).replaceWith(crew);
             });
         });
@@ -58,7 +58,7 @@ public class CrewStore implements ItemService.Equipped {
 
     /** Stores changed characters in Redis only, flagged for the next synchronization. */
     public Uni<Void> save(String publicKey, Crew crew) {
-        return cache.persist(publicKey, new Crew(crew.characters(), crew.copies(), true));
+        return cache.persist(publicKey, new Crew(crew.characters(), crew.copies(), crew.xp(), true));
     }
 
     @Override
@@ -73,8 +73,8 @@ public class CrewStore implements ItemService.Equipped {
                 return Uni.createFrom().voidItem();
             }
             // the entry may expire again once the database holds it
-            return repository.save(userId, new Roster(crew.characters(), crew.copies()))
-                    .flatMap(v -> cache.put(publicKey, new Crew(crew.characters(), crew.copies(), false)));
+            return repository.save(userId, new Roster(crew.characters(), crew.copies(), crew.xp()))
+                    .flatMap(v -> cache.put(publicKey, new Crew(crew.characters(), crew.copies(), crew.xp(), false)));
         });
     }
 
@@ -87,16 +87,31 @@ public class CrewStore implements ItemService.Equipped {
     /**
      * The characters of a user as kept in Redis: for each number of a character the user has, the item id by slot
      * number. copies says how many times a character was obtained (1 when absent: a character never drawn again).
+     * xp holds the experience points each character earned (0 when absent), see {@link Leveling}.
      * dirty says whether the database is behind.
      */
     public record Crew(
             @JsonProperty("characters") Map<Integer, Map<Integer, Integer>> characters,
             @JsonProperty("copies") Map<Integer, Integer> copies,
+            @JsonProperty("xp") Map<Integer, Integer> xp,
             @JsonProperty("dirty") boolean dirty) {
 
         public Crew {
-            // an entry cached before the recruitment existed has no copies
+            // an entry cached before the recruitment existed has no copies, and none had experience before the levels
             copies = copies == null ? Map.of() : copies;
+            xp = xp == null ? Map.of() : xp;
+        }
+
+        /** The experience points the character earned; 0 for a character the user does not have. */
+        public int xp(int num) {
+            return owns(num) ? Math.max(0, xp.getOrDefault(num, 0)) : 0;
+        }
+
+        /** A copy where the character has this total of experience points. */
+        public Crew withXp(int num, int total) {
+            Map<Integer, Integer> points = new TreeMap<>(xp);
+            points.put(num, total);
+            return new Crew(characters, copies, points, dirty);
         }
 
         /** Whether the user has this character. */
@@ -114,7 +129,7 @@ public class CrewStore implements ItemService.Equipped {
             Map<Integer, Integer> counts = new TreeMap<>(copies);
             counts.put(num, copies(num) + 1);
             all.putIfAbsent(num, Map.of());
-            return new Crew(all, counts, dirty);
+            return new Crew(all, counts, xp, dirty);
         }
 
         public Set<Integer> equippedIds() {
@@ -136,17 +151,18 @@ public class CrewStore implements ItemService.Equipped {
             }
             Map<Integer, Map<Integer, Integer>> all = new TreeMap<>(characters);
             all.put(num, equipment);
-            return new Crew(all, copies, dirty);
+            return new Crew(all, copies, xp, dirty);
         }
     }
 
     // ---- ports, implemented by the Panache and Redis adapters
 
     /**
-     * The characters of a user as kept in the database: the item id by slot and the number of copies, both by
-     * character number. A character without an entry in copies has one copy.
+     * The characters of a user as kept in the database: the item id by slot, the number of copies and the
+     * experience points, all by character number. A character without an entry has one copy, and no experience.
      */
-    public record Roster(Map<Integer, Map<Integer, Integer>> equipment, Map<Integer, Integer> copies) {
+    public record Roster(Map<Integer, Map<Integer, Integer>> equipment, Map<Integer, Integer> copies,
+                         Map<Integer, Integer> xp) {
     }
 
     public interface Repository {

@@ -5,6 +5,7 @@ import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.bogomips.treasureInc.engine.character.CharacterService;
+import org.bogomips.treasureInc.engine.character.CharacterService.XpGain;
 import org.bogomips.treasureInc.engine.item.Equipment;
 import org.bogomips.treasureInc.engine.item.Equipment.Skill;
 import org.bogomips.treasureInc.engine.item.ItemInfo;
@@ -119,7 +120,8 @@ class ExpeditionService {
                     return Uni.createFrom().item(new StartResult(spent.status(), null, spent.money(), false, false));
                 }
                 Expedition expedition = new Expedition(UUID.randomUUID().toString(), location, difficulty, rarity,
-                        rules.itemCount(location, difficulty, rarity), Instant.now().toString(), character);
+                        rules.itemCount(location, difficulty, rarity), Instant.now().toString(), character,
+                        rules.xp(location, difficulty, rarity));
                 return store.put(publicKey, expedition)
                         .flatMap(v -> store.clearDug(publicKey, location))
                         .replaceWith(new StartResult(SpendResult.Status.OK, expedition, spent.money(), false, false));
@@ -130,6 +132,7 @@ class ExpeditionService {
     /**
      * Generates the items of the expedition's chest; the expedition is removed, so a chest only opens once and its
      * character is available again. Each "luck_charm" item worn by the character may add one item to the chest.
+     * The character earns the experience points of the expedition.
      */
     Uni<OpenResult> open(String publicKey, String privateKey, String expeditionId) {
         return lock.withLock(publicKey, () -> users.openSession(publicKey, privateKey).flatMap(user -> {
@@ -142,8 +145,9 @@ class ExpeditionService {
                 }
                 return luckyItems(publicKey, expedition).flatMap(bonus ->
                         items.generateLocked(publicKey, privateKey, expedition.itemCount() + bonus))
-                        .flatMap(generated -> store.remove(publicKey, expeditionId)
-                                .replaceWith(new OpenResult(OpenResult.Status.OK, generated)));
+                        .flatMap(generated -> experience(publicKey, expedition)
+                                .flatMap(xp -> store.remove(publicKey, expeditionId)
+                                        .replaceWith(new OpenResult(OpenResult.Status.OK, generated, xp))));
             });
         }));
     }
@@ -159,6 +163,17 @@ class ExpeditionService {
                 .count());
     }
 
+    /** What the expedition brings to its character; null when nobody led it, or a character the user lost. */
+    private Uni<XpGain> experience(String publicKey, Expedition expedition) {
+        if (expedition.character() == null) {
+            return Uni.createFrom().nullItem();
+        }
+        // an expedition sent before the levels existed has no points of its own
+        int xp = expedition.xp() != null ? expedition.xp()
+                : rules.xp(expedition.location(), expedition.difficulty(), expedition.rarity());
+        return characters.gainXpLocked(publicKey, expedition.character(), xp);
+    }
+
     /** The id of the expedition under way of each busy character, by character number. */
     static Map<Integer, String> busyCharacters(List<Expedition> underWay) {
         Map<Integer, String> busy = new TreeMap<>();
@@ -171,6 +186,7 @@ class ExpeditionService {
     /**
      * An expedition on its way: it only lives in Redis, until its chest is opened.
      * character is the number of the character leading it (null for an expedition sent before characters existed).
+     * xp is what this character earns when the chest is opened (null for an expedition sent before the levels).
      */
     record Expedition(
             @JsonProperty("id") String id,
@@ -179,7 +195,8 @@ class ExpeditionService {
             @JsonProperty("rarity") int rarity,
             @JsonProperty("itemCount") int itemCount,
             @JsonProperty("createdAt") String createdAt,
-            @JsonProperty("character") Integer character) {
+            @JsonProperty("character") Integer character,
+            @JsonProperty("xp") Integer xp) {
     }
 
     /**
@@ -202,12 +219,13 @@ class ExpeditionService {
                        boolean unknownCharacter) {
     }
 
-    record OpenResult(Status status, List<ItemInfo> items) {
+    /** xp is what the character of the expedition earned; null when nobody led it. */
+    record OpenResult(Status status, List<ItemInfo> items, XpGain xp) {
 
         enum Status { OK, UNAUTHORIZED, NOT_FOUND }
 
         static OpenResult of(Status status) {
-            return new OpenResult(status, List.of());
+            return new OpenResult(status, List.of(), null);
         }
     }
 

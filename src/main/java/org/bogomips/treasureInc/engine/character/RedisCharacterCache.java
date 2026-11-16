@@ -12,7 +12,7 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
  * One key per user, "treasure_inc.characters.&lt;publicKey&gt;":
- * {"characters":{"1":{"3":640},"2":{},"3":{}},"dirty":true}
+ * {"characters":{"1":{"3":640},"2":{},"3":{}},"copies":{"1":2},"xp":{"1":350},"dirty":true}
  */
 @ApplicationScoped
 class RedisCharacterCache implements CrewStore.Cache {

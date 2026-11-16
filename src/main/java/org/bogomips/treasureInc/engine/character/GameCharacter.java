@@ -37,6 +37,9 @@ public class GameCharacter extends PanacheEntityBase {
     /** How many times the user obtained this character: 1, plus one for each duplicate drawn. */
     public Integer copies;
 
+    /** The experience points the character earned; its level is computed from them (see Leveling). */
+    public Integer xp;
+
     @Column(name = "createdat")
     public LocalDateTime createdAt;
 

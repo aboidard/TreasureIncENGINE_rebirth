@@ -93,6 +93,28 @@ public class CharacterService {
         });
     }
 
+    /**
+     * Gives experience points to a character of the user; null when the user does not have it. A character at the
+     * highest level earns nothing. Call it inside the user's lock, for a logged user.
+     */
+    public Uni<XpGain> gainXpLocked(String publicKey, int num, int amount) {
+        return crews.get(publicKey).flatMap(crew -> {
+            CharacterCatalog.Info info = CharacterCatalog.get(num);
+            if (crew == null || info == null || !crew.owns(num)) {
+                return Uni.createFrom().nullItem();
+            }
+            int before = crew.xp(num);
+            int after = Leveling.add(before, amount);
+            XpGain gain = new XpGain(info, after - before, Leveling.progress(before), Leveling.progress(after));
+            if (after == before) {
+                return Uni.createFrom().item(gain);
+            }
+            return crews.save(publicKey, crew.withXp(num, after))
+                    .flatMap(v -> users.markDirty(publicKey))
+                    .replaceWith(gain);
+        });
+    }
+
     private Uni<Result> change(String publicKey, String privateKey, int num,
                                Function<Crew, Uni<Change>> decide) {
         return lock.withLock(publicKey, () -> users.openSession(publicKey, privateKey).flatMap(user -> {
@@ -128,7 +150,7 @@ public class CharacterService {
             for (int num : new TreeSet<>(crew.characters().keySet())) {
                 CharacterCatalog.Info info = CharacterCatalog.get(num);
                 if (info != null) {
-                    views.add(new CharacterView(info, crew.copies(num), busy.get(num),
+                    views.add(new CharacterView(info, crew.copies(num), crew.xp(num), busy.get(num),
                             worn(crew.equipment(num), list.items())));
                 }
             }
@@ -156,10 +178,11 @@ public class CharacterService {
     public enum Status { OK, UNAUTHORIZED, NOT_FOUND, WRONG_SLOT, BUSY, UNKNOWN_CHARACTER }
 
     /**
-     * A character of a user as shown to the client: who it is, how many times the user obtained it, and what it
-     * wears; expeditionId is null unless the character is on an expedition.
+     * A character of a user as shown to the client: who it is, how many times the user obtained it, the experience
+     * points it earned and what it wears; expeditionId is null unless the character is on an expedition.
+     * The client receives its level, and its stats at this level (see {@link Leveling}).
      */
-    public record CharacterView(CharacterCatalog.Info info, int copies, String expeditionId,
+    public record CharacterView(CharacterCatalog.Info info, int copies, int totalXp, String expeditionId,
                                 Map<Integer, ItemInfo> equipment) {
 
         public int num() {
@@ -169,10 +192,35 @@ public class CharacterService {
         public Map<String, Object> toMap() {
             Map<String, Object> worn = new TreeMap<>();
             equipment.forEach((slot, item) -> worn.put(String.valueOf(slot), item.toMap()));
+            Leveling.Progress progress = Leveling.progress(totalXp);
             Map<String, Object> m = new LinkedHashMap<>(info.toMap());
+            m.put("stats", Leveling.stats(info, progress.level()));
+            m.put("level", progress.level());
+            m.put("xp", progress.xp());
+            m.put("xpNext", progress.xpNext());
             m.put("copies", copies);
             m.put("expeditionId", expeditionId);
             m.put("equipment", worn);
+            return m;
+        }
+    }
+
+    /**
+     * What an expedition brought to its character: the points really gained (0 at the highest level), and where
+     * the character stood before and stands after.
+     */
+    public record XpGain(CharacterCatalog.Info info, int gained, Leveling.Progress before, Leveling.Progress after) {
+
+        public Map<String, Object> toMap() {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("character", info.num());
+            m.put("gained", gained);
+            m.put("levelBefore", before.level());
+            m.put("level", after.level());
+            m.put("xp", after.xp());
+            m.put("xpNext", after.xpNext());
+            m.put("statsBefore", Leveling.stats(info, before.level()));
+            m.put("stats", Leveling.stats(info, after.level()));
             return m;
         }
     }

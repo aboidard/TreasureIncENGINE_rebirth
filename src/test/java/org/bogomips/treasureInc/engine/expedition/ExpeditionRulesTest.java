@@ -28,6 +28,10 @@ class ExpeditionRulesTest {
                 return 100;
             }
 
+            public int xpPerFloor() {
+                return 10;
+            }
+
             public Duration digTtl() {
                 return Duration.ofHours(24);
             }
@@ -81,6 +85,15 @@ class ExpeditionRulesTest {
         assertEquals(1000, rules.cost("mordak", 10));
         assertEquals(1000, rules.cost("gardakan", 5));
         assertEquals(3000, rules.cost("bobafett", 10));
+    }
+
+    @Test
+    void experienceDependsOnDifficultyLocationAndRarity() {
+        assertEquals(10, rules.xp("mordak", 1, 0));
+        assertEquals(12, rules.xp("mordak", 1, 1));
+        assertEquals(100, rules.xp("mordak", 10, 0));
+        assertEquals(150, rules.xp("gardakan", 5, 2));
+        assertEquals(600, rules.xp("bobafett", 10, 4));
     }
 
     @Test

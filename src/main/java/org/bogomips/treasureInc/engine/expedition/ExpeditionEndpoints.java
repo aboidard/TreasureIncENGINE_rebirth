@@ -39,7 +39,10 @@ class ExpeditionEndpoints {
         return RequestHandler.of("startExpedition", this::start);
     }
 
-    /** Opens the chest of an expedition: the number of items was set when it was sent. */
+    /**
+     * Opens the chest of an expedition: the number of items was set when it was sent. The reply also says what
+     * the expedition brought to its character ("xp"), null when nobody led it.
+     */
     @Produces
     RequestHandler generateItemsForUser() {
         return RequestHandler.of("generateItemsForUser", this::open);
@@ -102,6 +105,7 @@ class ExpeditionEndpoints {
             payload.put("character", result.expedition().character());
             payload.put("money", result.money());
             payload.put("itemCount", result.expedition().itemCount());
+            payload.put("xp", result.expedition().xp());
             return Protocol.reply(200, "OK", payload);
         });
     }
@@ -119,6 +123,7 @@ class ExpeditionEndpoints {
             case OK -> {
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("items", result.items().stream().map(ItemInfo::toMap).toList());
+                payload.put("xp", result.xp() == null ? null : result.xp().toMap());
                 yield Protocol.reply(200, "OK", payload);
             }
         });
