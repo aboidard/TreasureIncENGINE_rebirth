@@ -76,10 +76,10 @@ class LevelingTest {
 
     @Test
     void thePointsFollowTheProfileOfTheCharacter() {
-        // Zeph l'artificier, rank B (3 points a level): 9 strength, 3 constitution, 4 luck
+        // Zeph l'artificier, rank B (3 points a level): 9 strength, 3 constitution, 3 agility, 4 luck
         Info zeph = CharacterCatalog.get(12);
-        // level 17: 16 levels gained, 48 points, shared as 9/16, 3/16 and 4/16
-        assertEquals(Map.of("for", 9 + 27, "con", 3 + 9, "luk", 4 + 12), Leveling.stats(zeph, 17));
+        // level 20: 19 levels gained, 57 points, shared as 9/19, 3/19, 3/19 and 4/19
+        assertEquals(Map.of("for", 9 + 27, "con", 3 + 9, "agi", 3 + 9, "luk", 4 + 12), Leveling.stats(zeph, 20));
     }
 
     @Test

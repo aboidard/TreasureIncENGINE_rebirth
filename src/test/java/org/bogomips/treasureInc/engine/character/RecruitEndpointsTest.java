@@ -6,6 +6,7 @@ import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.Uni;
 import org.bogomips.treasureInc.engine.character.CharacterCatalog.Info;
 import org.bogomips.treasureInc.engine.character.CharacterCatalog.Rank;
+import org.bogomips.treasureInc.engine.item.Equipment.Skill;
 import org.bogomips.treasureInc.engine.item.ItemInfo;
 import org.bogomips.treasureInc.engine.item.ItemService;
 import org.bogomips.treasureInc.engine.item.ItemService.ItemList;
@@ -219,15 +220,32 @@ class RecruitEndpointsTest {
     }
 
     @Test
+    void aRarerCharacterHasMoreSkillsOfItsOwn() {
+        assertEquals(0, CharacterCatalog.skillCount(Rank.D));
+        assertEquals(0, CharacterCatalog.skillCount(Rank.C));
+        assertEquals(1, CharacterCatalog.skillCount(Rank.B));
+        assertEquals(5, CharacterCatalog.skillCount(Rank.SSS));
+        for (Info c : CharacterCatalog.all()) {
+            assertEquals(CharacterCatalog.skillCount(c.rank()), c.skills().size(), c.name());
+            assertEquals(c.skills().size(), new HashSet<>(c.skills()).size(), c.name() + " has the same skill twice");
+            assertTrue(c.skills().stream().noneMatch(s -> s.type() == Skill.Type.OTHER),
+                    c.name() + " only has fight skills");
+            assertEquals(c.skillIds(), c.toMap().get("skills"));
+            assertTrue(c.agility() >= 1, c.name() + " has some agility");
+        }
+        assertEquals(List.of("war_cry"), CharacterCatalog.get(11).skillIds());
+    }
+
+    @Test
     void aStrongerRankIsRarerAndStronger() {
         Rank[] ranks = Rank.values();
         for (int i = 1; i < ranks.length; i++) {
             assertTrue(ranks[i].weight() < ranks[i - 1].weight(), ranks[i] + " must be rarer than " + ranks[i - 1]);
             int rank = i;
             int weakest = CharacterCatalog.all().stream().filter(c -> c.rank() == ranks[rank])
-                    .mapToInt(c -> c.strength() + c.constitution() + c.luck()).min().orElseThrow();
+                    .mapToInt(c -> c.strength() + c.constitution() + c.agility() + c.luck()).min().orElseThrow();
             int strongestBelow = CharacterCatalog.all().stream().filter(c -> c.rank() == ranks[rank - 1])
-                    .mapToInt(c -> c.strength() + c.constitution() + c.luck()).max().orElseThrow();
+                    .mapToInt(c -> c.strength() + c.constitution() + c.agility() + c.luck()).max().orElseThrow();
             assertTrue(weakest > strongestBelow, ranks[i] + " must be stronger than " + ranks[i - 1]);
         }
     }

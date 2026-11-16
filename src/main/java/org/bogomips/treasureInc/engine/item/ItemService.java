@@ -3,6 +3,9 @@ package org.bogomips.treasureInc.engine.item;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import org.bogomips.treasureInc.engine.quest.QuestCatalog.Metric;
+import org.bogomips.treasureInc.engine.quest.QuestTracker;
 import org.bogomips.treasureInc.engine.user.UserService;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
@@ -25,17 +28,29 @@ public class ItemService {
     private final Equipped equipped;
     private final ItemCatalog catalog;
     private final int idBlockSize;
+    private final QuestTracker quests;
+
+    /** An item service that counts nothing for the quests. */
+    public ItemService(Repository repository, Cache itemCache, UserService users, UserService.Lock lock,
+                       Equipped equipped, int graphicsCount, int idBlockSize, double equipableChance) {
+        this(repository, itemCache, users, lock, equipped, graphicsCount, idBlockSize, equipableChance,
+                QuestTracker.NONE);
+    }
 
     /**
      * @param graphicsCount number of item sprites in the client (ItemManager.sprites); a graphics id is below it
      * @param idBlockSize   how many ids are reserved from the database sequence at once
      * @param equipableChance chance, in percent, that a generated item is an equipment
+     * @param quests        where the items sold are counted
      */
+    @Inject
     public ItemService(Repository repository, Cache itemCache, UserService users, UserService.Lock lock,
                        Equipped equipped,
                        @ConfigProperty(name = "engine.items.graphics-count") int graphicsCount,
                        @ConfigProperty(name = "engine.items.id-block-size", defaultValue = "100") int idBlockSize,
-                       @ConfigProperty(name = "engine.items.equipable-chance", defaultValue = "5") double equipableChance) {
+                       @ConfigProperty(name = "engine.items.equipable-chance", defaultValue = "5") double equipableChance,
+                       QuestTracker quests) {
+        this.quests = quests;
         if (idBlockSize < 1) {
             throw new IllegalArgumentException("engine.items.id-block-size must be at least 1, got " + idBlockSize);
         }
@@ -90,6 +105,10 @@ public class ItemService {
             if (user == null) {
                 return Uni.createFrom().nullItem();
             }
+            if (count <= 0) {
+                // an empty chest: nothing to reserve (Redis refuses to take zero ids) nor to write
+                return Uni.createFrom().item(List.<ItemInfo>of());
+            }
             return newIds(count).flatMap(ids -> {
                 List<ItemInfo> generated = ids.stream().map(catalog::generate).toList();
                 return list(publicKey).flatMap(current -> {
@@ -133,7 +152,10 @@ public class ItemService {
      * has no cached session to credit (the pending items' value is then added in the same transaction).
      */
     public Uni<SellResult> sell(String publicKey, String privateKey, List<Integer> ids) {
-        return lock.withLock(publicKey, () -> sellLocked(publicKey, privateKey, ids));
+        return lock.withLock(publicKey, () -> sellLocked(publicKey, privateKey, ids).flatMap(result ->
+                result.status() != SellResult.Status.OK ? Uni.createFrom().item(result)
+                        : quests.addLocked(publicKey, Map.of(Metric.SALES, result.soldIds().size()))
+                                .replaceWith(result)));
     }
 
     private Uni<SellResult> sellLocked(String publicKey, String privateKey, List<Integer> ids) {

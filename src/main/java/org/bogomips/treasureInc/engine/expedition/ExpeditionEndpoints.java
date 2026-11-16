@@ -33,7 +33,10 @@ class ExpeditionEndpoints {
         return RequestHandler.of("digCase", this::dig);
     }
 
-    /** Pays for an expedition, whose cost depends on its location and difficulty: 402 if the balance is too low. */
+    /**
+     * Pays for an expedition, whose cost depends on its location and difficulty: 402 if the balance is too low.
+     * The reply tells what happens to the character on the way ("run"), and "xp" what it will earn in the end.
+     */
     @Produces
     RequestHandler startExpedition() {
         return RequestHandler.of("startExpedition", this::start);
@@ -41,7 +44,8 @@ class ExpeditionEndpoints {
 
     /**
      * Opens the chest of an expedition: the number of items was set when it was sent. The reply also says what
-     * the expedition brought to its character ("xp"), null when nobody led it.
+     * the expedition brought to its character ("xp"), null when nobody led it, and how many of its floors the
+     * character finished ("floorsCompleted" out of "floors").
      */
     @Produces
     RequestHandler generateItemsForUser() {
@@ -106,6 +110,7 @@ class ExpeditionEndpoints {
             payload.put("money", result.money());
             payload.put("itemCount", result.expedition().itemCount());
             payload.put("xp", result.expedition().xp());
+            payload.put("run", result.run().toMap());
             return Protocol.reply(200, "OK", payload);
         });
     }
@@ -124,6 +129,8 @@ class ExpeditionEndpoints {
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("items", result.items().stream().map(ItemInfo::toMap).toList());
                 payload.put("xp", result.xp() == null ? null : result.xp().toMap());
+                payload.put("floors", result.expedition().difficulty());
+                payload.put("floorsCompleted", result.expedition().completed());
                 yield Protocol.reply(200, "OK", payload);
             }
         });

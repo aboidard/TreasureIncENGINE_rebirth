@@ -30,10 +30,27 @@ public interface ExpeditionConfig {
     /** How long a user's unopened expeditions are kept after the last one was sent. */
     Duration ttl();
 
+    Obstacles obstacles();
+
     /** By lowercase location name. */
     Map<String, Location> locations();
 
     interface Location {
         int level();
+    }
+
+    /** What may stand in the way of a character on each floor (see ExpeditionRun). The chances are in percent. */
+    interface Obstacles {
+        /** How many spots of a floor may hold an obstacle. */
+        int spots();
+
+        /** Chance that a spot holds a barricade. */
+        int barricadeChance();
+
+        /** Chance that a spot holds a monster; with the chance of a barricade, 100 at most. */
+        int monsterChance();
+
+        /** Chance that the chest of a floor is kept by a monster. */
+        int guardianChance();
     }
 }

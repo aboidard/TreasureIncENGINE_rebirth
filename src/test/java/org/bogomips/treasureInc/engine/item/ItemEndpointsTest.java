@@ -101,6 +101,10 @@ class ItemEndpointsTest {
         }
 
         public Uni<List<Integer>> takeIds(int count) {
+            if (count <= 0) {
+                // as Redis does
+                throw new IllegalArgumentException("`count` must be greater than zero");
+            }
             List<Integer> ids = new ArrayList<>();
             while (ids.size() < count && !idPool.isEmpty()) {
                 ids.add(idPool.poll());
@@ -245,6 +249,15 @@ class ItemEndpointsTest {
         assertNull(itemCache.get(PUB).items().get(3).description());
         assertNotNull(itemCache.get(PUB).items().get(3).descriptionId());
         assertEquals(3, dbItems.size());
+    }
+
+    @Test
+    void generatingNothingGivesAnEmptyList() {
+        // the chest of a character that died on the first floor
+        assertNull(service.generateLocked(PUB, "bad", 0).await().indefinitely());
+        assertTrue(service.generateLocked(PUB, PRIV, 0).await().indefinitely().isEmpty());
+        assertTrue(nextIdsCalls.isEmpty());
+        assertNull(itemCache.get(PUB));
     }
 
     @Test

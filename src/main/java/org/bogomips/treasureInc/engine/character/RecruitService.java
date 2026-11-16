@@ -8,12 +8,15 @@ import org.bogomips.treasureInc.engine.character.CharacterCatalog.Portal;
 import org.bogomips.treasureInc.engine.character.CharacterCatalog.Rank;
 import org.bogomips.treasureInc.engine.character.CharacterService.CharacterView;
 import org.bogomips.treasureInc.engine.character.CrewStore.Crew;
+import org.bogomips.treasureInc.engine.quest.QuestCatalog.Metric;
+import org.bogomips.treasureInc.engine.quest.QuestTracker;
 import org.bogomips.treasureInc.engine.user.UserService;
 import org.bogomips.treasureInc.engine.user.UserService.SpendResult;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.random.RandomGenerator;
 
 /**
@@ -31,16 +34,25 @@ public class RecruitService {
     private final int cost;
     private final int multi;
     private final RandomGenerator random;
+    private final QuestTracker quests;
 
     @Inject
     public RecruitService(CrewStore crews, CharacterService characters, UserService users, UserService.Lock lock,
                           @ConfigProperty(name = "engine.recruitment.cost", defaultValue = "1000") int cost,
-                          @ConfigProperty(name = "engine.recruitment.multi", defaultValue = "10") int multi) {
-        this(crews, characters, users, lock, cost, multi, RandomGenerator.getDefault());
+                          @ConfigProperty(name = "engine.recruitment.multi", defaultValue = "10") int multi,
+                          QuestTracker quests) {
+        this(crews, characters, users, lock, cost, multi, RandomGenerator.getDefault(), quests);
+    }
+
+    /** A recruitment that counts nothing for the quests. */
+    RecruitService(CrewStore crews, CharacterService characters, UserService users, UserService.Lock lock,
+                   int cost, int multi, RandomGenerator random) {
+        this(crews, characters, users, lock, cost, multi, random, QuestTracker.NONE);
     }
 
     RecruitService(CrewStore crews, CharacterService characters, UserService users, UserService.Lock lock,
-                   int cost, int multi, RandomGenerator random) {
+                   int cost, int multi, RandomGenerator random, QuestTracker quests) {
+        this.quests = quests;
         if (cost < 0 || multi < 2) {
             throw new IllegalArgumentException("engine.recruitment: cost cannot be negative and multi is at least 2");
         }
@@ -87,6 +99,7 @@ public class RecruitService {
                 Crew saved = updated;
                 return crews.save(publicKey, saved)
                         .flatMap(v -> users.markDirty(publicKey))
+                        .flatMap(v -> quests.addLocked(publicKey, Map.of(Metric.RECRUITS, count)))
                         .flatMap(v -> characters.viewsLocked(publicKey, saved))
                         .map(views -> new Result(SpendResult.Status.OK, draws, spent.money(), views.characters()));
             });
