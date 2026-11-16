@@ -367,7 +367,10 @@ class ExpeditionEndpointsTest {
         assertEquals(400, call(h, "\"private_key\":\"" + PRIV + "\",\"location\":\"mordak\",\"difficulty\":1").get("status").asInt(),
                 "an expedition needs a character");
         assertEquals(400, start("\"location\":\"mordak\",\"difficulty\":1,\"character\":0").get("status").asInt());
-        assertEquals(400, start("\"location\":\"mordak\",\"difficulty\":1,\"character\":4").get("status").asInt());
+        assertEquals(400, start("\"location\":\"mordak\",\"difficulty\":1,\"character\":21").get("status").asInt());
+        assertEquals(404, start("\"location\":\"mordak\",\"difficulty\":1,\"character\":4").get("status").asInt(),
+                "a character the user does not have");
+        assertEquals(401, call(h, "\"private_key\":\"bad\",\"location\":\"mordak\",\"difficulty\":1,\"character\":4").get("status").asInt());
         assertEquals(400, start("\"location\":\"mordak\",\"difficulty\":1,\"character\":\"1\"").get("status").asInt());
         assertEquals(400, start("\"location\":\"mordak\",\"difficulty\":1,\"character\":null").get("status").asInt());
         assertEquals(400, start("\"location\":\"morgoth\",\"difficulty\":1").get("status").asInt());

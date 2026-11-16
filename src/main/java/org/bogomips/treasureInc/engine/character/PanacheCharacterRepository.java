@@ -16,40 +16,48 @@ import java.util.TreeMap;
 class PanacheCharacterRepository implements CrewStore.Repository {
 
     @Override
-    public Uni<Map<Integer, Map<Integer, Integer>>> load(String publicKey, int count) {
+    public Uni<CrewStore.Roster> load(String publicKey, int count) {
         return Panache.withTransaction(() -> User.<User>find("publicKey", publicKey).firstResult().flatMap(user -> {
             if (user == null) {
                 return Uni.createFrom().nullItem();
             }
             return ofUser(user.id).flatMap(existing -> {
                 Map<Integer, Map<Integer, Integer>> crew = new TreeMap<>();
-                existing.forEach(c -> crew.put(c.num, slots(c.equipment)));
+                Map<Integer, Integer> copies = new TreeMap<>();
+                existing.forEach(c -> {
+                    crew.put(c.num, slots(c.equipment));
+                    copies.put(c.num, c.copies == null ? 1 : c.copies);
+                });
                 List<GameCharacter> missing = new ArrayList<>();
                 for (int num = 1; num <= count; num++) {
                     if (crew.putIfAbsent(num, Map.of()) == null) {
-                        missing.add(newCharacter(user.id, num, Map.of()));
+                        copies.put(num, 1);
+                        missing.add(newCharacter(user.id, num, Map.of(), 1));
                     }
                 }
                 Uni<Void> created = missing.isEmpty() ? Uni.createFrom().voidItem() : GameCharacter.persist(missing);
-                return created.replaceWith(crew);
+                return created.replaceWith(new CrewStore.Roster(crew, copies));
             });
         }));
     }
 
     @Override
-    public Uni<Void> save(int userId, Map<Integer, Map<Integer, Integer>> equipment) {
+    public Uni<Void> save(int userId, CrewStore.Roster roster) {
         return Panache.withTransaction(() -> ofUser(userId).flatMap(existing -> {
             LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
-            Map<Integer, Map<Integer, Integer>> left = new TreeMap<>(equipment);
+            Map<Integer, Map<Integer, Integer>> left = new TreeMap<>(roster.equipment());
             for (GameCharacter c : existing) {
                 Map<Integer, Integer> worn = left.remove(c.num);
                 if (worn != null) {
                     c.equipment = json(worn);
+                    c.copies = roster.copies().getOrDefault(c.num, 1);
                     c.updatedAt = now;
                 }
             }
+            // the characters recruited since the last synchronization
             List<GameCharacter> missing = left.entrySet().stream()
-                    .map(e -> newCharacter(userId, e.getKey(), e.getValue())).toList();
+                    .map(e -> newCharacter(userId, e.getKey(), e.getValue(),
+                            roster.copies().getOrDefault(e.getKey(), 1))).toList();
             return missing.isEmpty() ? Uni.createFrom().voidItem() : GameCharacter.persist(missing);
         }));
     }
@@ -58,11 +66,12 @@ class PanacheCharacterRepository implements CrewStore.Repository {
         return GameCharacter.list("userId = ?1 order by num", userId);
     }
 
-    private static GameCharacter newCharacter(int userId, int num, Map<Integer, Integer> equipment) {
+    private static GameCharacter newCharacter(int userId, int num, Map<Integer, Integer> equipment, int copies) {
         GameCharacter c = new GameCharacter();
         c.userId = userId;
         c.num = num;
         c.equipment = json(equipment);
+        c.copies = copies;
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         c.createdAt = now;
         c.updatedAt = now;

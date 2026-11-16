@@ -10,10 +10,13 @@ import java.util.TreeMap;
 /** A {@link CrewStore} over maps instead of Redis and the database, for the tests of every domain. */
 public final class InMemoryCrews {
 
+    /** The characters every user starts with. */
     public static final int COUNT = 3;
 
     /** What the "database" holds: the equipment by character number, by public key. */
     public final Map<String, Map<Integer, Map<Integer, Integer>>> database = new HashMap<>();
+    /** The copies of each character in the "database", by character number, by public key. */
+    public final Map<String, Map<Integer, Integer>> copies = new HashMap<>();
     public final Map<String, Crew> cache = new HashMap<>();
     /** The user ids given to {@link CrewStore.Repository#save}, by public key through {@link #userIds}. */
     public final Map<Integer, String> userIds = new HashMap<>();
@@ -30,7 +33,7 @@ public final class InMemoryCrews {
 
     public CrewStore store() {
         return new CrewStore(new CrewStore.Repository() {
-            public Uni<Map<Integer, Map<Integer, Integer>>> load(String publicKey, int count) {
+            public Uni<CrewStore.Roster> load(String publicKey, int count) {
                 loads++;
                 if (!knownPublicKey.equals(publicKey)) {
                     return Uni.createFrom().nullItem();
@@ -39,12 +42,15 @@ public final class InMemoryCrews {
                 for (int num = 1; num <= count; num++) {
                     crew.putIfAbsent(num, Map.of());
                 }
-                return Uni.createFrom().item(new TreeMap<>(crew));
+                Map<Integer, Integer> counts = copies.computeIfAbsent(publicKey, k -> new TreeMap<>());
+                crew.keySet().forEach(num -> counts.putIfAbsent(num, 1));
+                return Uni.createFrom().item(new CrewStore.Roster(new TreeMap<>(crew), new TreeMap<>(counts)));
             }
 
-            public Uni<Void> save(int userId, Map<Integer, Map<Integer, Integer>> equipment) {
+            public Uni<Void> save(int userId, CrewStore.Roster roster) {
                 saves++;
-                database.put(userIds.get(userId), new TreeMap<>(equipment));
+                database.put(userIds.get(userId), new TreeMap<>(roster.equipment()));
+                copies.put(userIds.get(userId), new TreeMap<>(roster.copies()));
                 return Uni.createFrom().voidItem();
             }
         }, new CrewStore.Cache() {

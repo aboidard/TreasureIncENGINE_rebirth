@@ -94,6 +94,9 @@ class ExpeditionEndpoints {
             if (result.characterBusy()) {
                 return Protocol.reply(409, "The character is on an expedition");
             }
+            if (result.unknownCharacter()) {
+                return Protocol.reply(404, "Character not found");
+            }
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("expeditionId", result.expedition().id());
             payload.put("character", result.expedition().character());
