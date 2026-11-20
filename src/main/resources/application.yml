@@ -23,8 +23,9 @@ engine:
     # how long the characters read from the database stay in Redis; no expiry while a change waits for the sync
     cache-ttl-seconds: 300
   recruitment:
-    # price of one draw in a portal; the portals, their characters and the rates of the ranks are in CharacterCatalog
-    cost: 1000
+    # price of one draw in a portal, in gems (a "multi" costs multi times as much); the portals, their characters
+    # and the rates of the ranks are in CharacterCatalog
+    cost: 100
     # how many draws the "several draws at once" request makes
     multi: 10
   expeditions:
@@ -64,6 +65,10 @@ engine:
     zone: Europe/Paris
     # how long the quests of a player are kept in Redis: longer than a week, so no board is lost while it lasts
     ttl: 8d
+  gifts:
+    # how many of the gifts waiting in a gift box are sent to the client at once (the latest first); the gifts
+    # themselves are sent by Maestro (sendGift) and live in the database (table gifts)
+    list-limit: 100
   sync:
     # how often the scheduler looks at the logged users
     check-interval: 30s

@@ -82,13 +82,20 @@ public class UserService {
      * {@code pendingSync} is true when the database does not have this amount yet.
      */
     public Uni<UserInfo> credit(String publicKey, int amount, boolean pendingSync) {
+        return credit(publicKey, amount, 0, pendingSync);
+    }
+
+    /**
+     * Adds money and gems to the cached session; emits the updated user, or null when the user is not logged in.
+     * {@code pendingSync} is true when the database does not have these amounts yet.
+     */
+    public Uni<UserInfo> credit(String publicKey, int money, int gems, boolean pendingSync) {
         return cache.get(publicKey).flatMap(cached -> {
             if (cached == null) {
                 return Uni.createFrom().nullItem();
             }
             UserInfo u = cached.user();
-            UserInfo updated = new UserInfo(u.id(), u.publicKey(), Math.addExact(u.money(), amount), u.lastLogin(),
-                    u.createdAt(), u.updatedAt());
+            UserInfo updated = u.withBalance(Math.addExact(u.money(), money), Math.addExact(u.gems(), gems));
             return cache.put(publicKey, cached.withUser(updated, pendingSync)).replaceWith(updated);
         });
     }
@@ -99,15 +106,26 @@ public class UserService {
      * Call it inside the user's {@link Lock}.
      */
     public Uni<SpendResult> spendLocked(String publicKey, String privateKey, int amount) {
+        return spendLocked(publicKey, privateKey, Currency.MONEY, amount);
+    }
+
+    /**
+     * Like {@link #spendLocked(String, String, int)}, in any currency: the {@link SpendResult} then holds the
+     * balance of this currency. Call it inside the user's {@link Lock}.
+     */
+    public Uni<SpendResult> spendLocked(String publicKey, String privateKey, Currency currency, int amount) {
         return openSession(publicKey, privateKey).flatMap(user -> {
             if (user == null) {
                 return Uni.createFrom().item(new SpendResult(SpendResult.Status.UNAUTHORIZED, 0));
             }
-            if (user.money() < amount) {
-                return Uni.createFrom().item(new SpendResult(SpendResult.Status.NOT_ENOUGH_MONEY, user.money()));
+            int balance = currency.of(user);
+            if (balance < amount) {
+                return Uni.createFrom().item(new SpendResult(SpendResult.Status.NOT_ENOUGH_MONEY, balance));
             }
-            return credit(publicKey, -amount, true)
-                    .map(updated -> new SpendResult(SpendResult.Status.OK, updated.money()));
+            Uni<UserInfo> debit = currency == Currency.GEMS
+                    ? credit(publicKey, 0, -amount, true)
+                    : credit(publicKey, -amount, 0, true);
+            return debit.map(updated -> new SpendResult(SpendResult.Status.OK, currency.of(updated)));
         });
     }
 
@@ -156,7 +174,22 @@ public class UserService {
     public record CreatedUser(UserInfo user, String privateKey) {
     }
 
-    /** Outcome of {@link #spendLocked}; money is the balance afterwards (unchanged unless OK). */
+    /** What the user pays with. */
+    public enum Currency {
+        /** The gold of the game. */
+        MONEY,
+        /** The premium currency. */
+        GEMS;
+
+        public int of(UserInfo user) {
+            return this == GEMS ? user.gems() : user.money();
+        }
+    }
+
+    /**
+     * Outcome of {@link #spendLocked}; money is the balance afterwards of the currency spent (unchanged unless OK).
+     * NOT_ENOUGH_MONEY means that the balance of this currency is too low.
+     */
     public record SpendResult(Status status, int money) {
 
         public enum Status { OK, UNAUTHORIZED, NOT_ENOUGH_MONEY }
@@ -248,8 +281,8 @@ public class UserService {
 
         Uni<UserInfo> create(String publicKey, String privateKey, int money);
 
-        /** Writes the balance held in Redis. */
-        Uni<Void> updateMoney(int userId, int money);
+        /** Writes the balances held in Redis. */
+        Uni<Void> updateBalance(int userId, int money, int gems);
     }
 
     public interface Cache {

@@ -28,7 +28,7 @@ class QuestEndpoints {
     }
 
     /**
-     * Takes the reward of a completed quest: 404 when the quest is not on the boards of the user (any more),
+     * Takes the reward of a completed quest (the daily bonus too, "daily_bonus"): 404 when the quest is not on the boards of the user (any more),
      * 409 when it is not completed or already claimed.
      */
     @Produces
@@ -62,10 +62,12 @@ class QuestEndpoints {
             case OK -> {
                 Map<String, Object> reward = new LinkedHashMap<>();
                 reward.put("money", result.quest().money());
+                reward.put("gems", result.quest().gems());
                 reward.put("items", result.items().stream().map(ItemInfo::toMap).toList());
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("quest", result.quest().id());
                 payload.put("money", result.money());
+                payload.put("gems", result.gems());
                 payload.put("reward", reward);
                 payload.put("quests", quests.toMap(result.state()));
                 yield Protocol.reply(200, "OK", payload);

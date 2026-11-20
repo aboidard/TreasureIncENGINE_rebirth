@@ -39,8 +39,10 @@ class RecruitEndpointsTest {
     private static final String PUB = "12345678900";
     private static final String PRIV = "secret";
     private static final int USER_ID = 1;
-    private static final int START_MONEY = 15000;
-    private static final int COST = 1000;
+    private static final int GOLD = 5000;
+    private static final int START_GEMS = 1500;
+    // in gems
+    private static final int COST = 100;
     private static final int MULTI = 10;
     private static final String PORTAL = "masterpack1";
 
@@ -62,14 +64,14 @@ class RecruitEndpointsTest {
 
         public Uni<UserInfo> authenticate(String pub, String priv) {
             return Uni.createFrom().item(PUB.equals(pub) && PRIV.equals(priv)
-                    ? new UserInfo(USER_ID, pub, START_MONEY, "t", "t", "t") : null);
+                    ? new UserInfo(USER_ID, pub, GOLD, START_GEMS, "t", "t", "t") : null);
         }
 
         public Uni<Boolean> exists(String pub) {
             return Uni.createFrom().item(false);
         }
 
-        public Uni<Void> updateMoney(int id, int money) {
+        public Uni<Void> updateBalance(int id, int money, int gems) {
             return Uni.createFrom().voidItem();
         }
 
@@ -198,8 +200,8 @@ class RecruitEndpointsTest {
         script.add(index);
     }
 
-    private int money() {
-        return sessions.get(PUB).user().money();
+    private int gems() {
+        return sessions.get(PUB).user().gems();
     }
 
     // ---- catalog
@@ -277,6 +279,7 @@ class RecruitEndpointsTest {
         assertEquals(PORTAL, portal.get("id").asText());
         assertEquals("Masterpack vol. 1", portal.get("name").asText());
         assertEquals(COST, portal.get("cost").asInt());
+        assertEquals("gems", portal.get("currency").asText());
         assertEquals(MULTI, portal.get("multi").asInt());
         assertEquals(20, portal.get("characters").size());
         assertEquals("SSS", portal.at("/characters/19/rank").asText());
@@ -309,8 +312,9 @@ class RecruitEndpointsTest {
         assertTrue(draws.at("/0/isNew").asBoolean());
         assertEquals(1, draws.at("/0/copies").asInt());
 
-        assertEquals(START_MONEY - COST, r.at("/payload/money").asInt());
-        assertEquals(START_MONEY - COST, money());
+        assertEquals(START_GEMS - COST, r.at("/payload/gems").asInt());
+        assertEquals(START_GEMS - COST, gems());
+        assertEquals(GOLD, sessions.get(PUB).user().money(), "the summons are paid in gems, not in gold");
 
         JsonNode list = r.at("/payload/characters");
         assertEquals(4, list.size());
@@ -337,7 +341,7 @@ class RecruitEndpointsTest {
         assertEquals(3, r.at("/payload/characters").size(), "no character was added");
         assertEquals(2, r.at("/payload/characters/1/copies").asInt());
         assertEquals(1, r.at("/payload/characters/0/copies").asInt());
-        assertEquals(START_MONEY - COST, money(), "a duplicate is paid too");
+        assertEquals(START_GEMS - COST, gems(), "a duplicate is paid too");
     }
 
     @Test
@@ -355,7 +359,7 @@ class RecruitEndpointsTest {
         assertFalse(draws.at("/1/isNew").asBoolean());
         assertEquals(2, draws.at("/1/copies").asInt());
         assertEquals(4, draws.at("/2/num").asInt());
-        assertEquals(START_MONEY - MULTI * COST, money());
+        assertEquals(START_GEMS - MULTI * COST, gems());
 
         Set<Integer> owned = new HashSet<>();
         r.at("/payload/characters").forEach(c -> owned.add(c.get("num").asInt()));
@@ -366,16 +370,16 @@ class RecruitEndpointsTest {
     }
 
     @Test
-    void nothingIsDrawnWithoutEnoughMoney() throws Exception {
+    void nothingIsDrawnWithoutEnoughGems() throws Exception {
         assertEquals(200, recruit(MULTI).get("status").asInt());
-        int left = money();
-        assertEquals(START_MONEY - MULTI * COST, left);
+        int left = gems();
+        assertEquals(START_GEMS - MULTI * COST, left);
         Map<Integer, Map<Integer, Integer>> before = crews.cache.get(PUB).characters();
 
         JsonNode r = recruit(MULTI);
         assertEquals(402, r.get("status").asInt());
-        assertEquals(left, r.at("/payload/money").asInt());
-        assertEquals(left, money());
+        assertEquals(left, r.at("/payload/gems").asInt());
+        assertEquals(left, gems());
         assertEquals(before, crews.cache.get(PUB).characters());
         assertEquals(200, recruit(1).get("status").asInt(), "one draw is still affordable");
     }
@@ -391,10 +395,10 @@ class RecruitEndpointsTest {
         assertEquals(400, recruit(PRIV, ",\"portal\":\"" + PORTAL + "\",\"count\":\"1\"").get("status").asInt());
         assertEquals(400, call(endpoints.recruit(), "{\"user\":\"" + PUB + "\",\"portal\":\"" + PORTAL + "\"}")
                 .get("status").asInt());
-        assertTrue(sessions.isEmpty() || money() == START_MONEY, "nothing was paid");
+        assertTrue(sessions.isEmpty() || gems() == START_GEMS, "nothing was paid");
 
         assertEquals(200, recruit(PRIV, ",\"portal\":\"" + PORTAL + "\"").get("status").asInt(), "one draw by default");
-        assertEquals(START_MONEY - COST, money());
+        assertEquals(START_GEMS - COST, gems());
     }
 
     // ---- with the rest of the characters

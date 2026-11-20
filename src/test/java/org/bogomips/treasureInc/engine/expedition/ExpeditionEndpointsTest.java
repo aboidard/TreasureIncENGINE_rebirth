@@ -63,7 +63,7 @@ class ExpeditionEndpointsTest {
             return Uni.createFrom().item(false);
         }
 
-        public Uni<Void> updateMoney(int id, int money) {
+        public Uni<Void> updateBalance(int id, int money, int gems) {
             return Uni.createFrom().voidItem();
         }
 

@@ -168,7 +168,7 @@ class ItemEndpointsTest {
             return Uni.createFrom().item(false);
         }
 
-        public Uni<Void> updateMoney(int id, int money) {
+        public Uni<Void> updateBalance(int id, int money, int gems) {
             if (id == failingUserId) {
                 return Uni.createFrom().failure(new IllegalStateException("database down"));
             }

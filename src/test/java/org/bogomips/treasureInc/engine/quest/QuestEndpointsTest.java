@@ -78,7 +78,7 @@ class QuestEndpointsTest {
             return Uni.createFrom().item(false);
         }
 
-        public Uni<Void> updateMoney(int id, int money) {
+        public Uni<Void> updateBalance(int id, int money, int gems) {
             return Uni.createFrom().voidItem();
         }
 
@@ -284,8 +284,10 @@ class QuestEndpointsTest {
             assertTrue(weekly.money() > daily.money(), daily.id());
             assertTrue(weekly.items() > daily.items(), daily.id());
         }
-        assertEquals(Metric.values().length, QuestCatalog.of(Scope.DAILY).size());
-        assertEquals(Metric.values().length, QuestCatalog.of(Scope.WEEKLY).size());
+        // every metric but the one of the daily bonus, which is never drawn
+        assertEquals(Metric.values().length - 1, QuestCatalog.of(Scope.DAILY).size());
+        assertEquals(Metric.values().length - 1, QuestCatalog.of(Scope.WEEKLY).size());
+        assertTrue(QuestCatalog.of(Scope.DAILY).stream().noneMatch(d -> d.metric() == Metric.QUESTS));
     }
 
     // ---- progress
@@ -388,7 +390,7 @@ class QuestEndpointsTest {
     void aNewDayDrawsNewDailyQuestsAndKeepsTheWeeklyOnes() throws Exception {
         countEverything(1000);
         JsonNode before = quests();
-        assertEquals(6, before.get("claimable").asInt());
+        assertEquals(7, before.get("claimable").asInt(), "the quests of both boards, and the daily bonus");
 
         now = now.plus(Duration.ofHours(2));
         JsonNode after = quests();
@@ -398,6 +400,8 @@ class QuestEndpointsTest {
         }
         assertEquals(before.at("/weekly/quests"), after.at("/weekly/quests"));
         assertEquals(3, after.get("claimable").asInt(), "what was not claimed yesterday is lost");
+        assertEquals(0, after.at("/daily/bonus/progress").asInt(), "the bonus starts again");
+        assertFalse(after.at("/daily/bonus/completed").asBoolean());
         String old = before.at("/daily/quests/0/id").asText();
         if (quest(after, old) == null) {
             assertEquals(404, claim(old).get("status").asInt());
@@ -421,5 +425,80 @@ class QuestEndpointsTest {
         assertEquals("2026-W48", monday.at("/weekly/period").asText());
         assertEquals("2026-11-23", monday.at("/daily/period").asText());
         assertEquals(0, monday.get("claimable").asInt());
+    }
+
+    // ---- daily bonus
+
+    @Test
+    void theDailyBonusCountsTheCompletedDailyQuests() throws Exception {
+        JsonNode payload = quests();
+        JsonNode bonus = payload.at("/daily/bonus");
+        assertEquals("daily_bonus", bonus.get("id").asText());
+        assertEquals("quests", bonus.get("metric").asText());
+        assertEquals(3, bonus.get("goal").asInt());
+        assertEquals(0, bonus.get("progress").asInt());
+        assertFalse(bonus.get("completed").asBoolean());
+        assertEquals(1000, bonus.at("/reward/gems").asInt());
+        assertEquals(0, bonus.at("/reward/money").asInt());
+        assertEquals(0, bonus.at("/reward/items").asInt());
+        assertTrue(payload.at("/weekly/bonus").isMissingNode(), "only the daily board has a bonus");
+        assertNull(quest(payload, "daily_bonus"), "the bonus is not one of the quests drawn");
+        assertEquals(409, claim("daily_bonus").get("status").asInt(), "not completed yet");
+
+        JsonNode quests = payload.at("/daily/quests");
+        for (int i = 0; i < quests.size(); i++) {
+            Definition definition = QuestCatalog.get(quests.get(i).get("id").asText());
+            count(definition.metric(), definition.goal());
+            bonus = quests().at("/daily/bonus");
+            assertEquals(i + 1, bonus.get("progress").asInt());
+        }
+        payload = quests();
+        assertTrue(payload.at("/daily/bonus/completed").asBoolean());
+        assertEquals(3 + 1, payload.get("claimable").asInt(), "the three daily quests and the bonus");
+    }
+
+    @Test
+    void claimingTheDailyBonusGivesGemsOnce() throws Exception {
+        for (JsonNode quest : quests().at("/daily/quests")) {
+            Definition definition = QuestCatalog.get(quest.get("id").asText());
+            count(definition.metric(), definition.goal());
+        }
+        // the daily quests are completed but not claimed: that is enough
+        JsonNode r = claim("daily_bonus");
+        assertEquals(200, r.get("status").asInt());
+        assertEquals("daily_bonus", r.at("/payload/quest").asText());
+        assertEquals(1000, r.at("/payload/reward/gems").asInt());
+        assertEquals(0, r.at("/payload/reward/money").asInt());
+        assertEquals(0, r.at("/payload/reward/items").size());
+        assertEquals(1000, r.at("/payload/gems").asInt());
+        assertEquals(START_MONEY, r.at("/payload/money").asInt());
+        assertTrue(r.at("/payload/quests/daily/bonus/claimed").asBoolean());
+        assertEquals(3, r.at("/payload/quests/claimable").asInt());
+        assertEquals(1000, sessions.get(PUB).user().gems());
+        assertTrue(sessions.get(PUB).dirty(), "the gems wait for the synchronization");
+
+        assertEquals(409, claim("daily_bonus").get("status").asInt(), "already claimed");
+        assertEquals(1000, sessions.get(PUB).user().gems());
+        for (JsonNode quest : quests().at("/daily/quests")) {
+            assertFalse(quest.get("claimed").asBoolean(), "claiming the bonus claims nothing else");
+        }
+        assertFalse(boardsByUser.get(PUB).weekly().bonusClaimed());
+
+        now = now.plus(Duration.ofHours(2));
+        assertFalse(quests().at("/daily/bonus/claimed").asBoolean(), "a new day, a new bonus");
+    }
+
+    @Test
+    void aBoardStoredBeforeTheBonusHasItsBonusToClaim() throws Exception {
+        State old = mapper.readValue("{\"daily\":{\"period\":\"2026-11-18\",\"quests\":["
+                + "{\"id\":\"daily_sales\",\"progress\":30,\"claimed\":true},"
+                + "{\"id\":\"daily_digs\",\"progress\":10,\"claimed\":false},"
+                + "{\"id\":\"daily_items\",\"progress\":100,\"claimed\":false}]},"
+                + "\"weekly\":{\"period\":\"2026-W47\",\"quests\":[]}}", State.class);
+        boardsByUser.put(PUB, old);
+        JsonNode bonus = quests().at("/daily/bonus");
+        assertEquals(3, bonus.get("progress").asInt());
+        assertFalse(bonus.get("claimed").asBoolean());
+        assertEquals(200, claim("daily_bonus").get("status").asInt());
     }
 }
