@@ -81,6 +81,39 @@ public class CacheSyncService {
                 .collect().with(Collectors.summingInt(Integer::intValue));
     }
 
+    /**
+     * Writes every session with pending changes now, whatever the age of its last synchronization (asked by
+     * Maestro, e.g. before a deployment). Nothing is evicted. A failing user is counted in {@link SyncReport#errors}
+     * and left to the scheduled runs.
+     */
+    public Uni<SyncReport> syncAll() {
+        return userCache.scan()
+                .select().where(CachedSession::dirty)
+                .onItem().transformToUniAndConcatenate(s -> forceSync(s.user().publicKey())
+                        .map(synced -> synced ? Outcome.SYNCED : Outcome.SKIPPED)
+                        .onFailure().recoverWithItem(t -> {
+                            LOG.errorf(t, "event=forced_sync_failed user=%s reason=%s", s.user().publicKey(), t.toString());
+                            return Outcome.FAILED;
+                        }))
+                .collect().asList()
+                .map(outcomes -> new SyncReport(
+                        (int) outcomes.stream().filter(o -> o == Outcome.SYNCED).count(),
+                        (int) outcomes.stream().filter(o -> o == Outcome.FAILED).count()));
+    }
+
+    /** Under the user's lock, on a fresh copy: true when the session still had pending changes and was written. */
+    private Uni<Boolean> forceSync(String publicKey) {
+        return lock.withLock(publicKey, () -> userCache.get(publicKey).flatMap(fresh -> fresh == null || !fresh.dirty()
+                ? Uni.createFrom().item(false)
+                : sync(fresh).replaceWith(true)));
+    }
+
+    /** Outcome of {@link #syncAll}: how many users were written, and how many failed. */
+    public record SyncReport(int syncedUsers, int errors) {
+    }
+
+    private enum Outcome { SYNCED, SKIPPED, FAILED }
+
     private boolean isDue(CachedSession s, Instant now) {
         return s.dirty() && s.lastSyncAt().plus(maxAge).isBefore(now);
     }
