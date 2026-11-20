@@ -62,6 +62,7 @@ Types de requête (`payload.type`) et paramètres (`payload.params`) :
 | `getQuests` | `user`, `private_key` | 200 `{claimable, daily, weekly}` (voir « Quêtes ») · 401 |
 | `claimQuest` | `user`, `private_key`, `quest` | 200 `{quest, money, reward: {money, items}, quests}` · 401 · 404 (quête absente des tableaux du joueur) · 409 (quête non terminée ou déjà récupérée) |
 | `healthcheck` | — | `{name, status, data, checks: [{name, status}]}` (checks de readiness : base, Redis) |
+| `forceSync` | — | 200 `{startedAt, durationMs, syncedUsers, errors}` (administration, voir « Synchronisation forcée ») |
 
 Un paramètre manquant ou invalide renvoie 400.
 
@@ -72,6 +73,17 @@ Le compromis est assumé : peu d'écritures en base pendant le jeu, et une fenê
 
 Un objet généré reçoit tout de suite son **id définitif**, pris dans la séquence PostgreSQL `items_id_seq` : il ne change pas quand l'objet est écrit en base, et le client peut le vendre avant comme après la synchronisation.
 Pour ne pas solliciter la base à chaque génération, les ids sont réservés **par blocs** (`engine.items.id-block-size`, 100 par défaut) en un seul appel (`nextval` sur un `generate_series`) ; ceux qui ne servent pas tout de suite attendent dans une liste Redis partagée par toutes les instances.
+
+#### Synchronisation forcée
+La requête `forceSync` écrit **tout de suite** en base chaque session qui a des changements en attente (`dirty`), sans attendre `engine.sync.max-age`, et n'évince rien.
+Chaque joueur est traité sous son verrou, sur une copie fraîche de la session, exactement comme par le job planifié ;
+un joueur en erreur est compté dans `errors` et repris par les passages suivants du job.
+Elle est envoyée par **Maestro** (`POST /admin/sync`) directement sur le canal Redis des requêtes : l'API ne relaie que les requêtes du jeu, un joueur ne peut donc pas la déclencher.
+
+#### Compteur de charge
+Chaque requête reçue est comptée dans Redis, par tranche de 10 secondes (`treasure_inc.stats.requests.<epochSeconde / 10>`, expiration 2 minutes), par toutes les instances du moteur.
+Maestro additionne les six dernières tranches complètes pour donner le nombre de requêtes par minute (`GET /admin/status`).
+Le comptage est « au mieux » : une erreur Redis est journalisée et ne retarde jamais la requête.
 
 ### Cohérence et concurrence
 - **Verrou distribué par joueur** sur Redis (acquisition atomique, libération réservée au propriétaire, expiration de sécurité) : les actions d'un même joueur sont sérialisées, même avec plusieurs instances du moteur.
@@ -363,7 +375,7 @@ src/main/java/.../engine
 ├── combat      combats : le personnage en combat, les monstres, le déroulement d'un combat
 ├── expedition  expéditions : creusage, envoi, obstacles, coffres, règles, noms générés
 ├── quest       quêtes quotidiennes et hebdomadaires : catalogue, tableaux des joueurs, récompenses, handlers
-└── sync        synchronisation planifiée cache → base de données
+└── sync        synchronisation cache → base de données : planifiée, ou forcée par Maestro
 ```
 
 Le code est organisé **par domaine métier** plutôt que par couche technique, chaque domaine exposant ses ports (interfaces) et ses adaptateurs Redis / PostgreSQL.
