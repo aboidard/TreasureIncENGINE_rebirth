@@ -130,7 +130,7 @@ public class QuestBoards implements QuestTracker {
             // the progress stops at the goal: it is what the client shows
             int progress = (int) Math.min(quest.goal(), (long) entry.progress() + amount);
             return progress == entry.progress() ? entry : new Entry(entry.id(), progress, entry.claimed());
-        }).toList());
+        }).toList(), board.bonusClaimed());
     }
 
     // ---- values
@@ -161,15 +161,38 @@ public class QuestBoards implements QuestTracker {
         }
     }
 
-    /** The quests of one period, see {@link #period}. */
+    /**
+     * The quests of one period, see {@link #period}.
+     *
+     * @param bonusClaimed true once the reward of the daily bonus ({@link QuestCatalog#BONUS}) was taken; a board
+     *                     stored before the bonus existed has no such field, which reads as false
+     */
     public record Board(
             @JsonProperty("period") String period,
-            @JsonProperty("quests") List<Entry> quests) {
+            @JsonProperty("quests") List<Entry> quests,
+            @JsonProperty("bonusClaimed") boolean bonusClaimed) {
+
+        public Board(String period, List<Entry> quests) {
+            this(period, quests, false);
+        }
+
+        /**
+         * The daily bonus on this board: its progress is how many of the quests drawn are completed. Its state is
+         * not stored, apart from {@link #bonusClaimed}: it follows the other quests.
+         */
+        public Entry bonus() {
+            Definition bonus = QuestCatalog.BONUS;
+            int completed = (int) quests.stream().filter(Entry::completed).count();
+            return new Entry(bonus.id(), Math.min(bonus.goal(), completed), bonusClaimed);
+        }
 
         /** A copy where the quest is claimed. */
         Board claimed(String id) {
+            if (QuestCatalog.BONUS.id().equals(id)) {
+                return new Board(period, quests, true);
+            }
             return new Board(period, quests.stream()
-                    .map(e -> e.id().equals(id) ? new Entry(e.id(), e.progress(), true) : e).toList());
+                    .map(e -> e.id().equals(id) ? new Entry(e.id(), e.progress(), true) : e).toList(), bonusClaimed);
         }
     }
 
@@ -182,20 +205,26 @@ public class QuestBoards implements QuestTracker {
             return scope == Scope.DAILY ? daily : weekly;
         }
 
-        /** Null when no board holds this quest. */
+        /** Null when no board holds this quest. The daily bonus is on the daily board. */
         public Entry entry(String id) {
+            if (QuestCatalog.BONUS.id().equals(id)) {
+                return daily.bonus();
+            }
             return java.util.stream.Stream.concat(daily.quests().stream(), weekly.quests().stream())
                     .filter(e -> e.id().equals(id)).findFirst().orElse(null);
         }
 
         public State claimed(String id) {
+            if (QuestCatalog.BONUS.id().equals(id)) {
+                return new State(daily.claimed(id), weekly);
+            }
             return new State(daily.claimed(id), weekly.claimed(id));
         }
 
-        /** How many rewards wait to be taken. */
+        /** How many rewards wait to be taken, the daily bonus included. */
         public int claimable() {
             return (int) java.util.stream.Stream.concat(daily.quests().stream(), weekly.quests().stream())
-                    .filter(Entry::claimable).count();
+                    .filter(Entry::claimable).count() + (daily.bonus().claimable() ? 1 : 0);
         }
     }
 

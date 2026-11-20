@@ -101,6 +101,15 @@ public class ItemService {
      * Call it inside the user's {@link UserService.Lock}.
      */
     public Uni<List<ItemInfo>> generateLocked(String publicKey, String privateKey, int count) {
+        return generateLocked(publicKey, privateKey, count, null);
+    }
+
+    /**
+     * Like {@link #generateLocked(String, String, int)}, every item having this rarity ("common"... "legendary",
+     * see {@link #isRarity}); a null rarity is drawn for each item as usual.
+     */
+    public Uni<List<ItemInfo>> generateLocked(String publicKey, String privateKey, int count, String rarityValue) {
+        ItemCatalog.Rarity rarity = rarityValue == null ? null : ItemCatalog.Rarity.fromValue(rarityValue);
         return users.openSession(publicKey, privateKey).flatMap(user -> {
             if (user == null) {
                 return Uni.createFrom().nullItem();
@@ -110,7 +119,8 @@ public class ItemService {
                 return Uni.createFrom().item(List.<ItemInfo>of());
             }
             return newIds(count).flatMap(ids -> {
-                List<ItemInfo> generated = ids.stream().map(catalog::generate).toList();
+                List<ItemInfo> generated = ids.stream()
+                        .map(id -> rarity == null ? catalog.generate(id) : catalog.generate(id, rarity)).toList();
                 return list(publicKey).flatMap(current -> {
                     List<ItemInfo> all = new ArrayList<>(current.userFound() ? current.items() : List.of());
                     all.addAll(generated);
@@ -122,6 +132,12 @@ public class ItemService {
                 });
             });
         });
+    }
+
+    /** True for the value of a rarity of the items: "common", "uncommon", "rare", "epic" or "legendary". */
+    public static boolean isRarity(String value) {
+        return value != null && java.util.Arrays.stream(ItemCatalog.Rarity.values())
+                .anyMatch(r -> r.value().equals(value));
     }
 
     /**

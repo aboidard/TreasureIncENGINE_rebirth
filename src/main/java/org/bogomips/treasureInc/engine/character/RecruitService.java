@@ -11,6 +11,7 @@ import org.bogomips.treasureInc.engine.character.CrewStore.Crew;
 import org.bogomips.treasureInc.engine.quest.QuestCatalog.Metric;
 import org.bogomips.treasureInc.engine.quest.QuestTracker;
 import org.bogomips.treasureInc.engine.user.UserService;
+import org.bogomips.treasureInc.engine.user.UserService.Currency;
 import org.bogomips.treasureInc.engine.user.UserService.SpendResult;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
@@ -20,7 +21,7 @@ import java.util.Map;
 import java.util.random.RandomGenerator;
 
 /**
- * Summons characters from a portal: the user pays, and each draw gives a character of the portal without knowing
+ * Summons characters from a portal: the user pays in gems, and each draw gives a character of the portal without knowing
  * which one beforehand. A character the user does not have joins its crew; another one is a duplicate, which is
  * only counted. Like every change of the crew, it is made in Redis under the user's lock.
  */
@@ -38,7 +39,7 @@ public class RecruitService {
 
     @Inject
     public RecruitService(CrewStore crews, CharacterService characters, UserService users, UserService.Lock lock,
-                          @ConfigProperty(name = "engine.recruitment.cost", defaultValue = "1000") int cost,
+                          @ConfigProperty(name = "engine.recruitment.cost", defaultValue = "100") int cost,
                           @ConfigProperty(name = "engine.recruitment.multi", defaultValue = "10") int multi,
                           QuestTracker quests) {
         this(crews, characters, users, lock, cost, multi, RandomGenerator.getDefault(), quests);
@@ -65,7 +66,7 @@ public class RecruitService {
         this.random = random;
     }
 
-    /** Price of one draw. */
+    /** Price of one draw, in gems. */
     public int cost() {
         return cost;
     }
@@ -83,7 +84,7 @@ public class RecruitService {
     /** Pays for {@code count} draws in the portal and adds the characters drawn to the crew of the user. */
     public Uni<Result> recruit(String publicKey, String privateKey, Portal portal, int count) {
         int price = Math.multiplyExact(cost, count);
-        return lock.withLock(publicKey, () -> users.spendLocked(publicKey, privateKey, price).flatMap(spent -> {
+        return lock.withLock(publicKey, () -> pay(publicKey, privateKey, price).flatMap(spent -> {
             if (spent.status() != SpendResult.Status.OK) {
                 return Uni.createFrom().item(new Result(spent.status(), List.of(), spent.money(), List.of()));
             }
@@ -106,6 +107,11 @@ public class RecruitService {
         }));
     }
 
+    /** The draws are paid in gems. */
+    private Uni<SpendResult> pay(String publicKey, String privateKey, int price) {
+        return users.spendLocked(publicKey, privateKey, Currency.GEMS, price);
+    }
+
     /** One draw: the rank first, by its weight, then any character of the portal with this rank. */
     Info draw(Portal portal) {
         List<Info> candidates = portal.ofRank(Rank.fromRoll(random.nextInt(Rank.TOTAL_WEIGHT)));
@@ -119,9 +125,9 @@ public class RecruitService {
     }
 
     /**
-     * Money is the balance afterwards (unchanged unless OK). The draws are in the order they were made, and the
+     * Gems is the balance of gems afterwards (unchanged unless OK). The draws are in the order they were made, and the
      * characters are every character of the user afterwards; both are empty unless OK.
      */
-    public record Result(SpendResult.Status status, List<Draw> draws, int money, List<CharacterView> characters) {
+    public record Result(SpendResult.Status status, List<Draw> draws, int gems, List<CharacterView> characters) {
     }
 }

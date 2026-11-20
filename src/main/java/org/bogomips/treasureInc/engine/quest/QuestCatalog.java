@@ -30,7 +30,9 @@ public final class QuestCatalog {
         /** Items sold. */
         SALES,
         /** Cases dug (digging the same case again does not count). */
-        DIGS;
+        DIGS,
+        /** Other daily quests completed: only counted by the daily bonus ({@link QuestCatalog#BONUS}), never drawn. */
+        QUESTS;
 
         public String key() {
             return name().toLowerCase(Locale.ROOT);
@@ -50,9 +52,16 @@ public final class QuestCatalog {
      * @param goal  how many times the metric must be counted
      * @param money what claiming the quest pays
      * @param items how many items claiming the quest gives
+     * @param gems  how many gems claiming the quest gives
      */
-    public record Definition(String id, Scope scope, Metric metric, int goal, int money, int items) {
+    public record Definition(String id, Scope scope, Metric metric, int goal, int money, int items, int gems) {
     }
+
+    /**
+     * The daily bonus: always the same, on every daily board, next to the quests drawn. It is completed with
+     * {@code goal} of the other daily quests (engine.quests.daily-count must not be lower) and pays gems.
+     */
+    public static final Definition BONUS = new Definition("daily_bonus", Scope.DAILY, Metric.QUESTS, 3, 0, 0, 1000);
 
     private static final List<Definition> ALL = List.of(
             daily(Metric.EXPEDITIONS, 5, 1500, 2),
@@ -79,19 +88,23 @@ public final class QuestCatalog {
 
     /** One quest per metric and scope, so the quests drawn together never count the same thing. */
     private static Definition daily(Metric metric, int goal, int money, int items) {
-        return new Definition("daily_" + metric.key(), Scope.DAILY, metric, goal, money, items);
+        return new Definition("daily_" + metric.key(), Scope.DAILY, metric, goal, money, items, 0);
     }
 
     private static Definition weekly(Metric metric, int goal, int money, int items) {
-        return new Definition("weekly_" + metric.key(), Scope.WEEKLY, metric, goal, money, items);
+        return new Definition("weekly_" + metric.key(), Scope.WEEKLY, metric, goal, money, items, 0);
     }
 
+    /** The quests that can be drawn for a board of this scope (the bonus is not one of them). */
     public static List<Definition> of(Scope scope) {
         return ALL.stream().filter(d -> d.scope() == scope).toList();
     }
 
     /** Null when no quest has this id. */
     public static Definition get(String id) {
+        if (BONUS.id().equals(id)) {
+            return BONUS;
+        }
         return ALL.stream().filter(d -> d.id().equals(id)).findFirst().orElse(null);
     }
 }

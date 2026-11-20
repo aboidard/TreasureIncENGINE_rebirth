@@ -218,7 +218,11 @@ class ItemCatalog {
      * any other item has no stats and any sprite of the sheet.
      */
     public ItemInfo generate(int id) {
-        Rarity rarity = Rarity.fromRoll(random.nextInt(1000) + 1);
+        return generate(id, Rarity.fromRoll(random.nextInt(1000) + 1));
+    }
+
+    /** An item of this rarity, otherwise made like {@link #generate(int)}. */
+    public ItemInfo generate(int id, Rarity rarity) {
         int price = (random.nextInt(1000) + 1000) * rarity.coef();
         String now = Instant.now().toString();
         if (equipmentKinds.isEmpty() || random.nextDouble() * 100 >= equipableChance) {
