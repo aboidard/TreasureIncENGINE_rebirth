@@ -44,7 +44,7 @@ class UserEndpointsTest {
             return Uni.createFrom().item(created.contains(pub));
         }
 
-        public Uni<Void> updateMoney(int id, int money) {
+        public Uni<Void> updateBalance(int id, int money, int gems) {
             return Uni.createFrom().voidItem();
         }
 

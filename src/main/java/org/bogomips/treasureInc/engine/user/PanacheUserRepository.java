@@ -40,10 +40,11 @@ class PanacheUserRepository implements UserService.Repository {
     }
 
     @Override
-    public Uni<Void> updateMoney(int userId, int money) {
+    public Uni<Void> updateBalance(int userId, int money, int gems) {
         return Panache.withTransaction(() -> User.<User>findById(userId).invoke(user -> {
             if (user != null) {
                 user.money = money;
+                user.gems = gems;
                 user.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
             }
         })).replaceWithVoid();
@@ -55,6 +56,7 @@ class PanacheUserRepository implements UserService.Repository {
         user.publicKey = publicKey;
         user.privateKey = privateKey;
         user.money = money;
+        user.gems = 0;
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         user.createdAt = now;
         user.updatedAt = now;

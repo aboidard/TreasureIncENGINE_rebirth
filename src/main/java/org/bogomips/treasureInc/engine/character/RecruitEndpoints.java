@@ -32,7 +32,7 @@ class RecruitEndpoints {
                 Map.of("portals", CharacterCatalog.portals().stream().map(this::portal).toList()))));
     }
 
-    /** Draws 1 or "multi" characters in a portal: 402 if the balance is too low. */
+    /** Draws 1 or "multi" characters in a portal, paid in gems: 402 if the user has not enough gems. */
     @Produces
     RequestHandler recruit() {
         return RequestHandler.of("recruit", this::recruit);
@@ -53,11 +53,11 @@ class RecruitEndpoints {
         }
         return recruits.recruit(publicKey, privateKey, portal, count).map(result -> switch (result.status()) {
             case UNAUTHORIZED -> Protocol.unauthorized();
-            case NOT_ENOUGH_MONEY -> Protocol.reply(402, "Not enough money", Map.of("money", result.money()));
+            case NOT_ENOUGH_MONEY -> Protocol.reply(402, "Not enough gems", Map.of("gems", result.gems()));
             case OK -> {
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("draws", result.draws().stream().map(RecruitEndpoints::draw).toList());
-                payload.put("money", result.money());
+                payload.put("gems", result.gems());
                 payload.put("characters", result.characters().stream().map(CharacterView::toMap).toList());
                 yield Protocol.reply(200, "OK", payload);
             }
@@ -76,6 +76,7 @@ class RecruitEndpoints {
         m.put("id", portal.id());
         m.put("name", portal.name());
         m.put("cost", recruits.cost());
+        m.put("currency", "gems");
         m.put("multi", recruits.multi());
         m.put("rates", rates());
         m.put("characters", portal.characters().stream().map(CharacterCatalog.Info::toMap).toList());
