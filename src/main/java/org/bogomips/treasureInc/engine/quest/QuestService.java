@@ -16,7 +16,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Reading the quests of a player and claiming the reward of those it completed: money and items.
+ * Reading the quests of a player and claiming the reward of those it completed: money, items and gems.
  * A reward is never given by itself: the player has to claim it before its board is replaced.
  */
 @ApplicationScoped
@@ -60,10 +60,10 @@ public class QuestService {
                 State claimed = state.claimed(questId);
                 // the quest is marked first: a failure afterwards cannot give its reward twice
                 return boards.saveLocked(publicKey, claimed)
-                        .flatMap(v -> users.credit(publicKey, quest.money(), true))
+                        .flatMap(v -> users.credit(publicKey, quest.money(), quest.gems(), true))
                         .flatMap(paid -> items.generateLocked(publicKey, privateKey, quest.items())
-                                .map(given -> new ClaimResult(ClaimResult.Status.OK, quest, paid.money(), given,
-                                        claimed)));
+                                .map(given -> new ClaimResult(ClaimResult.Status.OK, quest, paid.money(), paid.gems(),
+                                        given, claimed)));
             });
         }));
     }
@@ -71,7 +71,8 @@ public class QuestService {
     /**
      * What the client receives:
      * {"claimable": 1, "daily": {"period", "resetIn", "quests": [{"id", "metric", "goal", "progress", "completed",
-     * "claimed", "reward": {"money", "items"}}]}, "weekly": {...}}
+     * "claimed", "reward": {"money", "items", "gems"}}], "bonus": {...}}, "weekly": {...}}; only the daily board has a
+     * "bonus", a quest like the others whose progress is how many of its quests are completed
      */
     public Map<String, Object> toMap(State state) {
         Map<String, Object> m = new LinkedHashMap<>();
@@ -82,6 +83,9 @@ public class QuestService {
             b.put("period", board.period());
             b.put("resetIn", boards.resetIn(scope));
             b.put("quests", board.quests().stream().map(QuestService::toMap).toList());
+            if (scope == Scope.DAILY) {
+                b.put("bonus", toMap(board.bonus()));
+            }
             m.put(scope.key(), b);
         }
         return m;
@@ -104,21 +108,23 @@ public class QuestService {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("money", quest.money());
         m.put("items", quest.items());
+        m.put("gems", quest.gems());
         return m;
     }
 
     // ---- values
 
     /**
-     * quest is the quest claimed, money the balance afterwards, items the items given and state the boards
+     * quest is the quest claimed, money and gems the balances afterwards, items the items given and state the boards
      * afterwards; all are null or empty unless OK.
      */
-    public record ClaimResult(Status status, Definition quest, int money, List<ItemInfo> items, State state) {
+    public record ClaimResult(Status status, Definition quest, int money, int gems, List<ItemInfo> items,
+                              State state) {
 
         public enum Status { OK, UNAUTHORIZED, NOT_FOUND, NOT_COMPLETED, ALREADY_CLAIMED }
 
         static ClaimResult refused(Status status) {
-            return new ClaimResult(status, null, 0, List.of(), null);
+            return new ClaimResult(status, null, 0, 0, List.of(), null);
         }
     }
 }

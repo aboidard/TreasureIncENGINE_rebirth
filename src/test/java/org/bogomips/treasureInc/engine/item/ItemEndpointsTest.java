@@ -37,6 +37,8 @@ class ItemEndpointsTest {
             new ItemInfo(3, "c", "d", 3, 50, "common", "t", "t")));
     private int dbMoney = 1000;
     private int syncedMoney = -1;
+    // a user whose balance cannot be written to the "database"
+    private int failingUserId = -1;
     // the database sequence: database items above use ids 1..3
     private int dbSequence = 100;
     private final List<Integer> nextIdsCalls = new ArrayList<>();
@@ -166,7 +168,10 @@ class ItemEndpointsTest {
             return Uni.createFrom().item(false);
         }
 
-        public Uni<Void> updateMoney(int id, int money) {
+        public Uni<Void> updateBalance(int id, int money, int gems) {
+            if (id == failingUserId) {
+                return Uni.createFrom().failure(new IllegalStateException("database down"));
+            }
             syncedMoney = money;
             return Uni.createFrom().voidItem();
         }
@@ -356,6 +361,42 @@ class ItemEndpointsTest {
         assertNull(users.get(PUB));
         assertNull(itemCache.get(PUB));
         assertEquals(5, syncedMoney);
+    }
+
+    @Test
+    void forcedSyncWritesEveryPendingSessionNowWithoutEvicting() {
+        java.time.Instant justSynced = java.time.Instant.now();
+        UserInfo u = new UserInfo(1, PUB, 1234, "t", "t", "t");
+        UserInfo clean = new UserInfo(2, "00000000002", 5, "t", "t", "t");
+        // synced a second ago: the scheduled run would wait for max-age, the forced one does not
+        users.put(PUB, new CachedSession(u, justSynced.toString(), "h", justSynced.toString(), true));
+        users.put("00000000002", new CachedSession(clean, justSynced.toString(), "h"));
+        CacheSyncService sync = new CacheSyncService(userCache, cache, userRepo, itemRepo, lock, crewStore,
+                java.time.Duration.ofMinutes(3), java.time.Duration.ofHours(1));
+        assertEquals(0, sync.syncDue(java.time.Instant.now()).await().indefinitely());
+
+        CacheSyncService.SyncReport report = sync.syncAll().await().indefinitely();
+
+        assertEquals(new CacheSyncService.SyncReport(1, 0), report);
+        assertEquals(1234, syncedMoney);
+        assertFalse(users.get(PUB).dirty());
+        assertNotNull(users.get("00000000002"), "nothing is evicted");
+        assertEquals(java.util.List.of(PUB), locked, "only the pending session is written, under its lock");
+        assertEquals(new CacheSyncService.SyncReport(0, 0), sync.syncAll().await().indefinitely());
+    }
+
+    @Test
+    void forcedSyncCountsTheUsersItCouldNotWrite() {
+        String t = java.time.Instant.now().toString();
+        users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), t, "h", t, true));
+        users.put("00000000002", new CachedSession(new UserInfo(2, "00000000002", 5, "t", "t", "t"), t, "h", t, true));
+        failingUserId = 2;
+        CacheSyncService sync = new CacheSyncService(userCache, cache, userRepo, itemRepo, lock, crewStore,
+                java.time.Duration.ofMinutes(3), java.time.Duration.ofHours(1));
+
+        assertEquals(new CacheSyncService.SyncReport(1, 1), sync.syncAll().await().indefinitely());
+        assertFalse(users.get(PUB).dirty());
+        assertTrue(users.get("00000000002").dirty(), "left to the next runs");
     }
 
     @Test

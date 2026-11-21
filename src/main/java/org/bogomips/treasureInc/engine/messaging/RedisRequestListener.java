@@ -30,6 +30,7 @@ class RedisRequestListener {
     private final Redis redis;
     private final ReactivePubSubCommands<String> publisher;
     private final RequestDispatcher dispatcher;
+    private final RedisRequestStats stats;
     private final String requestChannel;
     private final String replyChannel;
 
@@ -40,12 +41,14 @@ class RedisRequestListener {
                                 Redis redis,
                                 ReactiveRedisDataSource dataSource,
                                 RequestDispatcher dispatcher,
+                                RedisRequestStats stats,
                                 @ConfigProperty(name = "engine.channels.requests") String requestChannel,
                                 @ConfigProperty(name = "engine.channels.replies") String replyChannel) {
         this.vertx = vertx;
         this.redis = redis;
         this.publisher = dataSource.pubsub(String.class);
         this.dispatcher = dispatcher;
+        this.stats = stats;
         this.requestChannel = requestChannel;
         this.replyChannel = replyChannel;
     }
@@ -113,6 +116,7 @@ class RedisRequestListener {
     }
 
     void onMessage(String message) {
+        stats.record();
         dispatcher.dispatch(message)
                 .onItem().ifNotNull().transformToUni(reply -> publisher.publish(replyChannel, reply.json())
                         .invoke(() -> LOG.debugf("event=reply_published replyId=%s channel=%s bytes=%d",

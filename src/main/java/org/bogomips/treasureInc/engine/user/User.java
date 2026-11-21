@@ -38,8 +38,11 @@ public class User extends PanacheEntityBase {
 
     public Integer money;
 
+    /** The premium currency (summons...). */
+    public Integer gems;
+
     public UserInfo toInfo() {
-        return new UserInfo(id, publicKey, money == null ? 0 : money, iso(lastLogin), iso(createdAt), iso(updatedAt));
+        return new UserInfo(id, publicKey, money == null ? 0 : money, gems == null ? 0 : gems, iso(lastLogin), iso(createdAt), iso(updatedAt));
     }
 
     private static String iso(LocalDateTime t) {

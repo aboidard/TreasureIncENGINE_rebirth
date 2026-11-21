@@ -19,7 +19,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Writes what only lives in Redis (user balance, generated items, equipment of the characters) to the database, and evicts idle sessions.
+ * Writes what only lives in Redis (user balances, generated items, equipment of the characters) to the database, and evicts idle sessions.
  * A session is synchronized when it has pending changes and its last synchronization is older than {@code maxAge}.
  * A session without pending changes and idle for longer than {@code sessionTtl} is removed from Redis.
  */
@@ -81,6 +81,39 @@ public class CacheSyncService {
                 .collect().with(Collectors.summingInt(Integer::intValue));
     }
 
+    /**
+     * Writes every session with pending changes now, whatever the age of its last synchronization (asked by
+     * Maestro, e.g. before a deployment). Nothing is evicted. A failing user is counted in {@link SyncReport#errors}
+     * and left to the scheduled runs.
+     */
+    public Uni<SyncReport> syncAll() {
+        return userCache.scan()
+                .select().where(CachedSession::dirty)
+                .onItem().transformToUniAndConcatenate(s -> forceSync(s.user().publicKey())
+                        .map(synced -> synced ? Outcome.SYNCED : Outcome.SKIPPED)
+                        .onFailure().recoverWithItem(t -> {
+                            LOG.errorf(t, "event=forced_sync_failed user=%s reason=%s", s.user().publicKey(), t.toString());
+                            return Outcome.FAILED;
+                        }))
+                .collect().asList()
+                .map(outcomes -> new SyncReport(
+                        (int) outcomes.stream().filter(o -> o == Outcome.SYNCED).count(),
+                        (int) outcomes.stream().filter(o -> o == Outcome.FAILED).count()));
+    }
+
+    /** Under the user's lock, on a fresh copy: true when the session still had pending changes and was written. */
+    private Uni<Boolean> forceSync(String publicKey) {
+        return lock.withLock(publicKey, () -> userCache.get(publicKey).flatMap(fresh -> fresh == null || !fresh.dirty()
+                ? Uni.createFrom().item(false)
+                : sync(fresh).replaceWith(true)));
+    }
+
+    /** Outcome of {@link #syncAll}: how many users were written, and how many failed. */
+    public record SyncReport(int syncedUsers, int errors) {
+    }
+
+    private enum Outcome { SYNCED, SKIPPED, FAILED }
+
     private boolean isDue(CachedSession s, Instant now) {
         return s.dirty() && s.lastSyncAt().plus(maxAge).isBefore(now);
     }
@@ -115,12 +148,13 @@ public class CacheSyncService {
         String publicKey = session.user().publicKey();
         int userId = session.user().id();
         int money = session.user().money();
-        return userRepository.updateMoney(userId, money)
+        int gems = session.user().gems();
+        return userRepository.updateBalance(userId, money, gems)
                 .flatMap(v -> syncItems(publicKey, userId))
                 .flatMap(inserted -> crews.sync(publicKey, userId).replaceWith(inserted))
-                .flatMap(inserted -> markSynced(publicKey, money)
-                        .invoke(() -> LOG.debugf("event=sync_done user=%s money=%d itemsInserted=%d",
-                                publicKey, money, inserted)));
+                .flatMap(inserted -> markSynced(publicKey, money, gems)
+                        .invoke(() -> LOG.debugf("event=sync_done user=%s money=%d gems=%d itemsInserted=%d",
+                                publicKey, money, gems, inserted)));
     }
 
     /** Inserts the pending items with the ids they already have, so the client's ids stay valid. */
@@ -159,13 +193,13 @@ public class CacheSyncService {
     }
 
 
-    /** Stays dirty if the balance moved while we were writing (only possible if the lock expired). */
-    private Uni<Void> markSynced(String publicKey, int syncedMoney) {
+    /** Stays dirty if a balance moved while we were writing (only possible if the lock expired). */
+    private Uni<Void> markSynced(String publicKey, int syncedMoney, int syncedGems) {
         return userCache.get(publicKey).flatMap(current -> {
             if (current == null) {
                 return Uni.createFrom().voidItem();
             }
-            boolean changed = current.user().money() != syncedMoney;
+            boolean changed = current.user().money() != syncedMoney || current.user().gems() != syncedGems;
             return userCache.put(publicKey, current.synced(Instant.now(), changed));
         });
     }

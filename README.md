@@ -46,7 +46,7 @@ Types de requête (`payload.type`) et paramètres (`payload.params`) :
 
 | Type | Paramètres | Réponse (`payload`) |
 |---|---|---|
-| `createUser` | — | 201 `{user}` (clé privée renvoyée une seule fois) |
+| `createUser` | — | 201 `{user}` (clé privée renvoyée une seule fois ; `user.money` et `user.gems`) |
 | `login` | `user`, `private_key` | 200 `{user}` · 401 |
 | `getItems` | `user`, `page` (dès 1), `limit` (≤ 100) | 200 `{items, page, limit, total}` · 404 |
 | `getPrivateItems` | idem + `private_key` | idem · 401 |
@@ -57,21 +57,36 @@ Types de requête (`payload.type`) et paramètres (`payload.params`) :
 | `getCharacters` | `user`, `private_key` | 200 `{characters}` · 401 |
 | `equipItem` | `user`, `private_key`, `character`, `slot`, `item` | 200 `{characters}` · 400 (mauvais slot) · 401 · 404 (objet absent ou personnage non recruté) · 409 (personnage en expédition) |
 | `unequipItem` | `user`, `private_key`, `character`, `slot` | 200 `{characters}` · 401 · 404 · 409 |
-| `getPortals` | — | 200 `{portals: [{id, name, cost, multi, rates, characters}]}` |
-| `recruit` | `user`, `private_key`, `portal`, `count` (1 ou `multi`, 1 par défaut) | 200 `{draws, money, characters}` · 401 · 402 `{money}` · 404 (portail inconnu) |
+| `getPortals` | — | 200 `{portals: [{id, name, cost, currency, multi, rates, characters}]}` (`cost` en gemmes) |
+| `recruit` | `user`, `private_key`, `portal`, `count` (1 ou `multi`, 1 par défaut) | 200 `{draws, gems, characters}` · 401 · 402 `{gems}` (pas assez de gemmes) · 404 (portail inconnu) |
 | `getQuests` | `user`, `private_key` | 200 `{claimable, daily, weekly}` (voir « Quêtes ») · 401 |
-| `claimQuest` | `user`, `private_key`, `quest` | 200 `{quest, money, reward: {money, items}, quests}` · 401 · 404 (quête absente des tableaux du joueur) · 409 (quête non terminée ou déjà récupérée) |
+| `claimQuest` | `user`, `private_key`, `quest` (ou `daily_bonus`) | 200 `{quest, money, gems, reward: {money, gems, items}, quests}` · 401 · 404 (quête absente des tableaux du joueur) · 409 (quête non terminée ou déjà récupérée) |
+| `getGifts` | `user`, `private_key` | 200 `{count, gifts}` (voir « Boîte à cadeaux ») · 401 |
+| `claimGift` | `user`, `private_key`, `gift` (id) | 200 `{gift, title, money, gems, reward: {money, gems, items}, gifts}` · 401 · 404 (pas un cadeau du joueur) · 409 (déjà récupéré) · 410 (expiré) |
 | `healthcheck` | — | `{name, status, data, checks: [{name, status}]}` (checks de readiness : base, Redis) |
+| `forceSync` | — | 200 `{startedAt, durationMs, syncedUsers, errors}` (administration, voir « Synchronisation forcée ») |
+| `sendGift` | `title`, `reward`, `players` (optionnel), `expiresInDays` (optionnel) | 200 `{batch, sent}` · 400 avec la raison (administration, voir « Boîte à cadeaux ») |
 
 Un paramètre manquant ou invalide renvoie 400.
 
 ### Cache « write-behind »
-L'état chaud des sessions de jeu (solde, inventaire, équipement des personnages) vit dans **Redis** pour des temps de réponse très faibles.
+L'état chaud des sessions de jeu (solde d'or et de gemmes, inventaire, équipement des personnages) vit dans **Redis** pour des temps de réponse très faibles.
 Un **job planifié** (Quarkus Scheduler) écrit périodiquement en base les sessions modifiées, puis évince les sessions inactives.
 Le compromis est assumé : peu d'écritures en base pendant le jeu, et une fenêtre de resynchronisation bornée et configurable.
 
 Un objet généré reçoit tout de suite son **id définitif**, pris dans la séquence PostgreSQL `items_id_seq` : il ne change pas quand l'objet est écrit en base, et le client peut le vendre avant comme après la synchronisation.
 Pour ne pas solliciter la base à chaque génération, les ids sont réservés **par blocs** (`engine.items.id-block-size`, 100 par défaut) en un seul appel (`nextval` sur un `generate_series`) ; ceux qui ne servent pas tout de suite attendent dans une liste Redis partagée par toutes les instances.
+
+#### Synchronisation forcée
+La requête `forceSync` écrit **tout de suite** en base chaque session qui a des changements en attente (`dirty`), sans attendre `engine.sync.max-age`, et n'évince rien.
+Chaque joueur est traité sous son verrou, sur une copie fraîche de la session, exactement comme par le job planifié ;
+un joueur en erreur est compté dans `errors` et repris par les passages suivants du job.
+Elle est envoyée par **Maestro** (`POST /admin/sync`) directement sur le canal Redis des requêtes : l'API ne relaie que les requêtes du jeu, un joueur ne peut donc pas la déclencher.
+
+#### Compteur de charge
+Chaque requête reçue est comptée dans Redis, par tranche de 10 secondes (`treasure_inc.stats.requests.<epochSeconde / 10>`, expiration 2 minutes), par toutes les instances du moteur.
+Maestro additionne les six dernières tranches complètes pour donner le nombre de requêtes par minute (`GET /admin/status`).
+Le comptage est « au mieux » : une erreur Redis est journalisée et ne retarde jamais la requête.
 
 ### Cohérence et concurrence
 - **Verrou distribué par joueur** sur Redis (acquisition atomique, libération réservée au propriétaire, expiration de sécurité) : les actions d'un même joueur sont sérialisées, même avec plusieurs instances du moteur.
@@ -284,7 +299,8 @@ envoyé qu'une fois, dans la réponse de `startExpedition`.
 Les personnages s'invoquent par des **portails**, sans savoir à l'avance qui sortira. Il n'y en a qu'un pour l'instant,
 `masterpack1` (« Masterpack vol. 1 »), qui contient les 20 personnages du catalogue.
 
-Un tirage coûte `engine.recruitment.cost` (1000) ; `recruit` en fait 1 ou `engine.recruitment.multi` (10) d'un coup.
+Les invocations se paient en **gemmes** (voir « Gemmes ») : un tirage coûte `engine.recruitment.cost` (100 gemmes) ;
+`recruit` en fait 1 ou `engine.recruitment.multi` (10) d'un coup, soit 1 000 gemmes. L'or du joueur n'est pas touché.
 Chaque tirage choisit d'abord un **rang** selon la table ci-dessous, puis un personnage du portail au hasard parmi ceux de ce rang.
 
 | Rang | SSS | SS | S | A | B | C | D |
@@ -294,15 +310,15 @@ Chaque tirage choisit d'abord un **rang** selon la table ci-dessous, puis un per
 
 - Un personnage que le joueur n'a pas rejoint son équipe : il peut aussitôt être équipé et mener une expédition.
 - Un personnage déjà possédé est un **doublon** : seul son compteur `copies` augmente (sans effet en jeu pour l'instant).
-- `recruit` répond avec les tirages dans l'ordre, `draws: [{num, name, rank, stats, isNew, copies}]`, le nouveau solde et
-  tous les personnages du joueur. Le client s'appuie sur les rangs tirés pour son animation.
+- `recruit` répond avec les tirages dans l'ordre, `draws: [{num, name, rank, stats, isNew, copies}]`, le nouveau solde de
+  gemmes (`gems`) et tous les personnages du joueur ; 402 `{gems}` quand il n'a pas assez de gemmes. Le client s'appuie sur les rangs tirés pour son animation.
 - `getPortals` décrit les portails (prix, table des chances, personnages) : le client n'a aucune de ces valeurs en dur.
 - Il n'y a pas de garantie (« pity ») : chaque tirage est indépendant.
 
 Ajouter un personnage : une ligne dans `CharacterCatalog` (les numéros ne changent jamais) et son portrait dans le client.
 
-Le schéma se met à jour avec `src/main/resources/db/update_001_equipment.sql`, `update_002_recruitment.sql`, `update_003_xp.sql` puis `update_004_armor_sprites.sql` (redonne un sprite d'armure aux
-armures générées avec un sprite de casque ou de bottes).
+Le schéma se met à jour avec `src/main/resources/db/update_001_equipment.sql`, `update_002_recruitment.sql`, `update_003_xp.sql`, `update_004_armor_sprites.sql` (redonne un sprite d'armure aux
+armures générées avec un sprite de casque ou de bottes) puis `update_005_gems_gifts.sql` (colonne `users.gems` et table `gifts`).
 
 ### Quêtes
 
@@ -341,12 +357,85 @@ de secondes avant le remplacement du tableau. Le client écrit lui-même la phra
 { "claimable": 1,
   "daily": { "period": "2026-11-16", "resetIn": 5400, "quests": [
     { "id": "daily_expeditions", "metric": "expeditions", "goal": 5, "progress": 5, "completed": true,
-      "claimed": false, "reward": { "money": 1500, "items": 2 } } ] },
+      "claimed": false, "reward": { "money": 1500, "items": 2, "gems": 0 } } ],
+    "bonus": { "id": "daily_bonus", "metric": "quests", "goal": 3, "progress": 1, "completed": false,
+      "claimed": false, "reward": { "money": 0, "items": 0, "gems": 1000 } } },
   "weekly": { "period": "2026-W47", "resetIn": 351000, "quests": [] } }
 ```
 
 Ajouter une quête : une valeur dans `QuestCatalog.Metric`, ses deux lignes (quotidienne et hebdomadaire) dans le
 catalogue, l'appel à `QuestTracker.addLocked` là où l'action a lieu, et sa phrase dans le client (`Quest.Describe`).
+
+**Super-bonus quotidien.** Chaque tableau quotidien a, en plus de ses quêtes tirées, une quatrième quête toujours la
+même : `daily_bonus` (`QuestCatalog.BONUS`, métrique `quests`), « accomplir 3 quêtes quotidiennes », qui rapporte
+**1 000 gemmes**. Elle n'est pas tirée et n'est pas dans la liste `quests` : `getQuests` la renvoie à part, dans
+`daily.bonus`, et le client l'affiche en récapitulatif sous les quêtes du jour.
+
+- Sa progression n'est pas stockée : c'est le nombre de quêtes du tableau quotidien **terminées** (récupérées ou non),
+  plafonné à son objectif. Seul le fait qu'elle a été récupérée est gardé, dans le tableau (`bonusClaimed`) : un nouveau
+  jour remet donc le bonus à zéro. Un tableau stocké avant le bonus le reçoit sans rien perdre.
+- Elle se récupère comme les autres, avec `claimQuest` et `quest: "daily_bonus"`, et compte dans `claimable`.
+- `engine.quests.daily-count` ne doit pas descendre sous 3, sans quoi le bonus ne pourrait plus être terminé.
+
+### Gemmes
+
+Les **gemmes** sont la monnaie premium du jeu, à côté de l'or (`money`). Un joueur commence avec 0 gemme.
+
+- Elles paient les invocations (voir « Recrutement ») et se gagnent avec le super-bonus quotidien et les cadeaux
+  (voir « Boîte à cadeaux »). Une récompense de quête ou de cadeau a un champ `gems` à côté de `money`.
+- Elles vivent dans la session Redis comme l'or (`user.gems`, une session plus ancienne sans ce champ vaut 0) et la
+  synchronisation les écrit dans `users.gems` (`Repository.updateBalance`).
+- `login` et `createUser` les renvoient dans `user.gems`.
+
+### Boîte à cadeaux
+
+Les cadeaux sont envoyés aux joueurs par les administrateurs (**Maestro**, `POST /admin/gifts`, qui relaie la requête
+`sendGift`) ou, plus tard, donnés par le jeu. Un cadeau a un **intitulé** (« Lancement du jeu : profitez de ces gemmes
+gratuites ! ») et une **récompense** : des gemmes, de l'or, et des objets générés au moment où il est récupéré, d'une
+rareté imposée ou tirée comme dans un coffre. Il attend dans la boîte du joueur jusqu'à ce qu'il le récupère, une seule
+fois ; il peut expirer.
+
+- **Stockage.** Contrairement au reste de l'état du jeu, les cadeaux vivent dans **PostgreSQL** (table `gifts`, une
+  ligne par joueur) : ils sont destinés à des joueurs qui n'ont peut-être pas joué depuis longtemps et n'ont donc pas de
+  session Redis. Un envoi est un seul `INSERT … SELECT` sur `users`, les joueurs ne sont jamais chargés.
+- **Récupération** (`claimGift`). Sous le verrou du joueur, le cadeau est d'abord marqué récupéré en base (ligne
+  verrouillée, `claimedat`), puis l'or et les gemmes sont crédités sur la session et les objets générés : une erreur après
+  coup ne peut pas le donner deux fois.
+- **Boîte** (`getGifts`). Les cadeaux ni récupérés ni expirés, du plus récent au plus ancien
+  (`engine.gifts.list-limit`, 100 au plus), et leur nombre total :
+
+```json
+{ "count": 1, "gifts": [
+  { "id": 12, "title": "Lancement du jeu : profitez de ces gemmes gratuites !",
+    "reward": { "money": 0, "gems": 1000, "items": 3, "rarity": "epic" },
+    "createdAt": "2026-11-20T10:00:00Z", "expiresAt": "2026-12-04T10:00:00Z" } ] }
+```
+
+**Envoi** (`sendGift`, administration). La requête n'est envoyée que par Maestro, sur le canal Redis des requêtes :
+l'API ne relaie que les requêtes du jeu.
+
+```json
+{ "title": "Lancement du jeu : profitez de ces gemmes gratuites !",
+  "reward": { "gems": 1000, "money": 5000, "items": 3, "rarity": "epic" },
+  "players": { "activeDays": 30, "inactiveDays": null, "createdDays": null, "publicKeys": ["12345678900"] },
+  "expiresInDays": 14 }
+```
+
+| Paramètre | Sens |
+|---|---|
+| `title` | obligatoire, 120 caractères au plus (les espaces autour sont retirés) |
+| `reward.gems`, `reward.money` | 0 à 100 000 000 |
+| `reward.items` | nombre d'objets générés à la récupération, 0 à 100 |
+| `reward.rarity` | `common`, `uncommon`, `rare`, `epic` ou `legendary` : tous les objets ont cette rareté ; absent ou `null` : chaque objet est tiré comme dans un coffre. Demande `items` > 0 |
+| `players` | optionnel : sans lui, **tous** les joueurs reçoivent le cadeau. Ses critères sont optionnels et se cumulent (ET) |
+| `players.activeDays` | joueurs actifs depuis `x` jours au plus : dernière activité = le plus récent de `lastlogin` et `updatedat` (écrit à chaque synchronisation de la session) |
+| `players.inactiveDays` | joueurs **sans** activité depuis `x` jours (pour faire revenir les absents) |
+| `players.createdDays` | joueurs inscrits depuis `x` jours au plus (bienvenue aux nouveaux) |
+| `players.publicKeys` | ces joueurs seulement (1 à 10 000 clés publiques de 11 chiffres, doublons ignorés ; une clé inconnue est ignorée) |
+| `expiresInDays` | optionnel : le cadeau ne peut plus être récupéré après ce nombre de jours (1 à 3650) ; sans lui il n'expire pas |
+
+Il faut au moins une gemme, une pièce ou un objet. La réponse donne l'identifiant de l'envoi (`batch`, écrit sur
+chaque cadeau) et le nombre de joueurs qui l'ont reçu (`sent`) ; une requête invalide reçoit 400 avec la raison.
 
 ### Observabilité
 - Logs structurés `clé=valeur` (lisibles et exploitables dans Kibana), JSON en production, **masquage automatique** des champs sensibles et troncature des charges volumineuses.
@@ -362,8 +451,9 @@ src/main/java/.../engine
 ├── character   personnages : catalogue, niveaux, recrutement, équipement, cache, persistance, handlers
 ├── combat      combats : le personnage en combat, les monstres, le déroulement d'un combat
 ├── expedition  expéditions : creusage, envoi, obstacles, coffres, règles, noms générés
-├── quest       quêtes quotidiennes et hebdomadaires : catalogue, tableaux des joueurs, récompenses, handlers
-└── sync        synchronisation planifiée cache → base de données
+├── quest       quêtes quotidiennes et hebdomadaires, super-bonus : catalogue, tableaux des joueurs, récompenses, handlers
+├── gift        boîte à cadeaux : envoi (Maestro), récupération, persistance, handlers
+└── sync        synchronisation cache → base de données : planifiée, ou forcée par Maestro
 ```
 
 Le code est organisé **par domaine métier** plutôt que par couche technique, chaque domaine exposant ses ports (interfaces) et ses adaptateurs Redis / PostgreSQL.
