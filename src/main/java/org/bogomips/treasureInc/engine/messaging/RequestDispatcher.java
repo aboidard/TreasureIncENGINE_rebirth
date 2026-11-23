@@ -9,9 +9,12 @@ import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Any;
 import jakarta.enterprise.inject.Instance;
+import org.bogomips.treasureInc.engine.settings.Settings.Maintenance;
+import org.bogomips.treasureInc.engine.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
@@ -20,6 +23,8 @@ import java.util.regex.Pattern;
 /**
  * Transport-agnostic core: parses a request envelope, routes it to the {@link RequestHandler}
  * registered for its type and builds the reply envelope. New request types only need a new handler bean.
+ * During a maintenance ({@link SettingsService#activeMaintenance}), the requests of the game are answered 503 without
+ * reaching their handler; the administration requests ({@link RequestHandler#admin}) are still served.
  */
 @ApplicationScoped
 class RequestDispatcher {
@@ -34,9 +39,11 @@ class RequestDispatcher {
 
     private final ObjectMapper mapper;
     private final Map<String, RequestHandler> handlers = new HashMap<>();
+    private final SettingsService settings;
 
-    RequestDispatcher(ObjectMapper mapper, @Any Instance<RequestHandler> handlerBeans) {
+    RequestDispatcher(ObjectMapper mapper, @Any Instance<RequestHandler> handlerBeans, SettingsService settings) {
         this.mapper = mapper;
+        this.settings = settings;
         handlerBeans.forEach(h -> handlers.put(h.type(), h));
     }
 
@@ -64,10 +71,14 @@ class RequestDispatcher {
                 loggable(payload.path("params")));
 
         RequestHandler handler = handlers.get(type);
+        Maintenance maintenance = handler == null || handler.admin() ? null : settings.activeMaintenance();
         Uni<Object> result;
         if (handler == null) {
             LOG.warnf("event=request_unhandled replyId=%s type=%s knownTypes=%s", id, type, knownTypes());
             result = Uni.createFrom().item(error("unknown request type: " + type));
+        } else if (maintenance != null) {
+            LOG.debugf("event=request_refused_maintenance replyId=%s type=%s", id, type);
+            result = Uni.createFrom().item(maintenanceReply(maintenance));
         } else {
             result = handler.handle(payload.path("params"))
                     .onFailure().recoverWithItem(t -> {
@@ -87,6 +98,17 @@ class RequestDispatcher {
 
     Set<String> knownTypes() {
         return Set.copyOf(handlers.keySet());
+    }
+
+    /**
+     * 503 Service Unavailable, the reason of the maintenance as message, and {"maintenance": {...}, "retryAfter"} as
+     * payload (retryAfter: seconds until the planned end, null when none is planned).
+     */
+    private Object maintenanceReply(Maintenance m) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("maintenance", m.toMap(settings.now()));
+        payload.put("retryAfter", m.secondsLeft(settings.now()));
+        return Protocol.reply(503, m.reason() == null ? "Maintenance" : m.reason(), payload);
     }
 
     private static Map<String, Object> error(String message) {

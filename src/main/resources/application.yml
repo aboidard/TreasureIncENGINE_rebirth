@@ -34,7 +34,7 @@ engine:
     # highest number of floors (the slider of SendExpeditionPanel)
     max-difficulty: 10
     max-items: 15
-    # cost of an expedition = floors * cost-per-floor * location level
+    # cost of an expedition = floors * cost-per-floor * location level, nothing at a location of level 1
     cost-per-floor: 100
     # experience of the character leading an expedition = floors * xp-per-floor * location level * (1 + rarity / 4);
     # the levels themselves are in Leveling
@@ -52,11 +52,14 @@ engine:
     dig-ttl: 24h
     # how long the unopened expeditions of a user are kept after the last one was sent
     ttl: 7d
-    # adding a location: one line here (lowercase name) and a Location asset with this name in the Unity client
+    # adding a location: one line here (lowercase name) and a Location asset with this name in the Unity client.
+    # level: the difficulty of the location (a location of level 1 is free, so a broke player can always go on);
+    # loot: the chances of each item rarity in its chests, in per mille: common, uncommon, rare, epic, legendary
+    # (adding up to 1000)
     locations:
-      mordak: { level: 1 }
-      gardakan: { level: 2 }
-      bobafett: { level: 3 }
+      mordak: { level: 1, loot: [880, 110, 10, 0, 0] }
+      gardakan: { level: 2, loot: [650, 200, 140, 9, 1] }
+      bobafett: { level: 3, loot: [450, 280, 220, 45, 5] }
   quests:
     # how many quests of QuestCatalog are drawn for a player each day, and each week (from Monday)
     daily-count: 3
@@ -69,6 +72,15 @@ engine:
     # how many of the gifts waiting in a gift box are sent to the client at once (the latest first); the gifts
     # themselves are sent by Maestro (sendGift) and live in the database (table gifts)
     list-limit: 100
+  events:
+    # how often every engine instance reads the events again from Redis; they are loaded from the database (table
+    # game_events) when the engine starts, and changed from Maestro. A day of an event (its maxPerDay) starts at
+    # midnight in the zone of the quests
+    refresh: 30s
+  settings:
+    # how often every engine instance reads the settings (maintenance, oldest client version) again from Redis:
+    # a change made from Maestro on one instance reaches the others within this time
+    refresh: 5s
   sync:
     # how often the scheduler looks at the logged users
     check-interval: 30s

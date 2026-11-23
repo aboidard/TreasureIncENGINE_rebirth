@@ -275,6 +275,24 @@ class ItemEndpointsTest {
     }
 
     @Test
+    void weightedRarityTable() {
+        List<Integer> firstLevel = List.of(880, 110, 10, 0, 0);
+        assertEquals(Rarity.COMMON, Rarity.fromRoll(880, firstLevel));
+        assertEquals(Rarity.UNCOMMON, Rarity.fromRoll(881, firstLevel));
+        assertEquals(Rarity.RARE, Rarity.fromRoll(991, firstLevel));
+        // no chance at all of an epic or a legendary item there
+        assertEquals(Rarity.RARE, Rarity.fromRoll(1000, firstLevel));
+        List<Integer> thirdLevel = List.of(450, 280, 220, 45, 5);
+        assertEquals(Rarity.EPIC, Rarity.fromRoll(995, thirdLevel));
+        assertEquals(Rarity.LEGENDARY, Rarity.fromRoll(996, thirdLevel));
+        // the standard chances give the standard table
+        List<Integer> standard = List.of(650, 200, 140, 9, 1);
+        for (int roll = 1; roll <= 1000; roll++) {
+            assertEquals(Rarity.fromRoll(roll), Rarity.fromRoll(roll, standard), "roll " + roll);
+        }
+    }
+
+    @Test
     void syncWritesPendingChangesOncePastMaxAge() throws Exception {
         users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), "old", CachedSession.hashKey(PRIV)));
         JsonNode gen = generate(2);

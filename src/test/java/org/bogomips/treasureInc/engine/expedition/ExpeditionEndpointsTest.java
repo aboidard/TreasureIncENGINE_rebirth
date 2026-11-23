@@ -7,6 +7,8 @@ import io.smallrye.mutiny.Uni;
 import org.bogomips.treasureInc.engine.character.CharacterService;
 import org.bogomips.treasureInc.engine.character.CrewStore;
 import org.bogomips.treasureInc.engine.character.InMemoryCrews;
+import org.bogomips.treasureInc.engine.events.EventService;
+import org.bogomips.treasureInc.engine.events.GameEvent;
 import org.bogomips.treasureInc.engine.expedition.ExpeditionService.Expedition;
 import org.bogomips.treasureInc.engine.item.ItemInfo;
 import org.bogomips.treasureInc.engine.item.ItemService;
@@ -21,6 +23,10 @@ import org.bogomips.treasureInc.engine.user.UserService.CachedSession;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -208,9 +214,129 @@ class ExpeditionEndpointsTest {
         }
     };
     private int luckRoll = 99;
+
+    /** The events of the tests, by code; and the expeditions sent to them, by "publicKey/code/day". */
+    private final Map<String, GameEvent> eventRows = new HashMap<>();
+    private final Map<String, Integer> eventRuns = new HashMap<>();
+    private static final Instant NOW = Instant.parse("2026-11-22T10:00:00Z");
+    private final EventService events = new EventService(
+            new EventService.Repository() {
+                public Uni<List<GameEvent>> load() {
+                    return Uni.createFrom().item(List.copyOf(eventRows.values()));
+                }
+
+                public Uni<GameEvent> save(GameEvent event) {
+                    eventRows.put(event.code(), event);
+                    return Uni.createFrom().item(event);
+                }
+
+                public Uni<Boolean> delete(String code) {
+                    return Uni.createFrom().item(eventRows.remove(code) != null);
+                }
+            },
+            new EventService.Mirror() {
+                public Uni<List<GameEvent>> read() {
+                    return Uni.createFrom().nullItem();
+                }
+
+                public Uni<Void> write(List<GameEvent> list) {
+                    return Uni.createFrom().voidItem();
+                }
+            },
+            new EventService.Runs() {
+                public Uni<Integer> count(String publicKey, String code, LocalDate day) {
+                    return Uni.createFrom().item(eventRuns.getOrDefault(publicKey + "/" + code + "/" + day, 0));
+                }
+
+                public Uni<Integer> add(String publicKey, String code, LocalDate day) {
+                    return Uni.createFrom().item(eventRuns.merge(publicKey + "/" + code + "/" + day, 1, Integer::sum));
+                }
+            },
+            Clock.fixed(NOW, ZoneId.of("Europe/Paris")));
+
     private final ExpeditionEndpoints endpoints = new ExpeditionEndpoints(
-            new ExpeditionService(store, users, items, lock, rules, characters, ExpeditionRulesTest.NO_OBSTACLE, luck),
-            rules, characters);
+            new ExpeditionService(store, users, items, lock, rules, characters, ExpeditionRulesTest.NO_OBSTACLE, luck)
+                    .withEvents(events),
+            rules, characters, events, users);
+
+    /** The launch event: once a day, 1000 gems, no item. */
+    private static final GameEvent LAUNCH = new GameEvent("lancement", "Lancement", null, "lancement", 1, 10, 1000, 0,
+            0, 1, null, null, true, 0, null);
+
+    // ---- events
+
+    private JsonNode startEvent(String code) throws Exception {
+        return call(endpoints.startEventExpedition(), "\"private_key\":\"" + PRIV + "\",\"event\":\"" + code
+                + "\",\"character\":" + (nextCharacter++ % InMemoryCrews.COUNT + 1));
+    }
+
+    @Test
+    void theOpenEventsAreListedWithWhatIsLeftToday() throws Exception {
+        events.save(LAUNCH).await().indefinitely();
+        events.save(new GameEvent("fini", "Fini", null, null, 2, 5, 10, 0, 0, 1, null,
+                Instant.parse("2026-01-01T00:00:00Z"), true, 0, null)).await().indefinitely();
+        events.save(new GameEvent("off", "Off", null, null, 2, 5, 10, 0, 0, 1, null, null, false, 0, null))
+                .await().indefinitely();
+
+        JsonNode r = call(endpoints.getEvents(), "\"private_key\":\"" + PRIV + "\"");
+        assertEquals(200, r.get("status").asInt());
+        JsonNode list = r.at("/payload/events");
+        assertEquals(1, list.size(), "only the open events");
+        assertEquals("lancement", list.get(0).get("code").asText());
+        assertEquals(1000, list.get(0).at("/rewards/gems").asInt());
+        assertEquals(1, list.get(0).get("remainingToday").asInt());
+
+        assertEquals(401, call(endpoints.getEvents(), "\"private_key\":\"bad\"").get("status").asInt());
+    }
+
+    @Test
+    void anEventIsFreeOnceADayAndItsChestGivesTheGems() throws Exception {
+        events.save(LAUNCH).await().indefinitely();
+        sessions.put(PUB, new CachedSession(new UserInfo(1, PUB, 0, "t", "t", "t"), "old", CachedSession.hashKey(PRIV)));
+
+        JsonNode sent = startEvent("lancement");
+        assertEquals(200, sent.get("status").asInt());
+        assertEquals(0, sent.at("/payload/money").asInt(), "free");
+        assertEquals(10, sent.at("/payload/floors").asInt());
+        Expedition expedition = stored.get(sent.at("/payload/expeditionId").asText());
+        assertEquals("event:lancement", expedition.location());
+
+        assertEquals(429, startEvent("lancement").get("status").asInt(), "once a day");
+        assertEquals(0, call(endpoints.getEvents(), "\"private_key\":\"" + PRIV + "\"")
+                .at("/payload/events/0/remainingToday").asInt());
+
+        JsonNode chest = open(expedition.id());
+        assertEquals(200, chest.get("status").asInt());
+        assertEquals(1000, chest.at("/payload/gems").asInt());
+        assertEquals(0, chest.at("/payload/items").size());
+        assertEquals(1000, sessions.get(PUB).user().gems());
+        assertEquals(1000, chest.at("/payload/balance/gems").asInt());
+        assertTrue(sessions.get(PUB).dirty(), "the gems must be written by the next synchronization");
+    }
+
+    @Test
+    void aClosedOrUnknownEventIsRefused() throws Exception {
+        events.save(new GameEvent("off", "Off", null, null, 2, 5, 10, 0, 0, 1, null, null, false, 0, null))
+                .await().indefinitely();
+        assertEquals(404, startEvent("off").get("status").asInt());
+        assertEquals(404, startEvent("morgoth").get("status").asInt());
+        assertTrue(stored.isEmpty());
+    }
+
+    @Test
+    void anEventIsCheckedWhenMaestroSavesIt() throws Exception {
+        assertThrows(IllegalArgumentException.class, () -> GameEvent.parse(mapper.readTree(
+                "{\"code\":\"x\",\"name\":\"X\",\"level\":4,\"floors\":10}")));
+        assertThrows(IllegalArgumentException.class, () -> GameEvent.parse(mapper.readTree(
+                "{\"code\":\"Bad Code\",\"name\":\"X\",\"level\":1,\"floors\":10}")));
+        GameEvent e = GameEvent.parse(mapper.readTree("{\"code\":\"noel\",\"name\":\"Noël\",\"level\":3,"
+                + "\"floors\":8,\"rewards\":{\"gems\":50,\"items\":3},\"start\":\"2026-12-24T00:00:00Z\"}"));
+        assertEquals(50, e.rewardGems());
+        assertEquals(3, e.rewardItems());
+        assertEquals(1, e.maxPerDay(), "once a day unless told otherwise");
+        assertTrue(e.enabled());
+        assertFalse(e.open(NOW), "not started yet");
+    }
     private int nextCharacter;
 
     private static String digKey(String location, int caseId) {
@@ -353,15 +479,25 @@ class ExpeditionEndpointsTest {
     @Test
     void startRefusesWhenTooPoor() throws Exception {
         sessions.put(PUB, new CachedSession(new UserInfo(1, PUB, 999, "t", "t", "t"), "old", CachedSession.hashKey(PRIV)));
-        digs.put("mordak/5", 2);
+        digs.put("gardakan/5", 2);
 
-        JsonNode r = start("\"location\":\"mordak\",\"difficulty\":10,\"case_id\":5");
+        JsonNode r = start("\"location\":\"gardakan\",\"difficulty\":5,\"case_id\":5");
         assertEquals(402, r.get("status").asInt());
         assertEquals(999, r.at("/payload/money").asInt());
         assertEquals(999, money());
         assertFalse(sessions.get(PUB).dirty());
         assertTrue(stored.isEmpty());
-        assertEquals(2, digs.get("mordak/5"), "the case is still dug");
+        assertEquals(2, digs.get("gardakan/5"), "the case is still dug");
+    }
+
+    @Test
+    void theFirstLevelIsFreeEvenForABrokeUser() throws Exception {
+        sessions.put(PUB, new CachedSession(new UserInfo(1, PUB, 0, "t", "t", "t"), "old", CachedSession.hashKey(PRIV)));
+
+        JsonNode r = start("\"location\":\"mordak\",\"difficulty\":10");
+        assertEquals(200, r.get("status").asInt());
+        assertEquals(0, r.at("/payload/money").asInt());
+        assertEquals(1, stored.size());
     }
 
     @Test
@@ -523,7 +659,7 @@ class ExpeditionEndpointsTest {
     /** Endpoints where a monster keeps every chest, and nothing else stands in the way. */
     private ExpeditionEndpoints guarded() {
         return new ExpeditionEndpoints(new ExpeditionService(store, users, items, lock, rules, characters,
-                ExpeditionRulesTest.obstacles(2, 0, 0, 100), new Random(11)), rules, characters);
+                ExpeditionRulesTest.obstacles(2, 0, 0, 100), new Random(11)), rules, characters, events, users);
     }
 
     private JsonNode startGuarded(String fields) throws Exception {
@@ -635,7 +771,7 @@ class ExpeditionEndpointsTest {
         };
         // a monster keeps every chest, and nothing else stands in the way
         ExpeditionEndpoints tracked = new ExpeditionEndpoints(new ExpeditionService(store, users, items, lock, rules,
-                characters, ExpeditionRulesTest.obstacles(2, 0, 0, 100), new Random(11), tracker), rules, characters);
+                characters, ExpeditionRulesTest.obstacles(2, 0, 0, 100), new Random(11), tracker), rules, characters, events, users);
         String key = "\"private_key\":\"" + PRIV + "\",";
 
         call(tracked.digCase(), key + "\"location\":\"mordak\",\"case_id\":3,\"cost\":500");

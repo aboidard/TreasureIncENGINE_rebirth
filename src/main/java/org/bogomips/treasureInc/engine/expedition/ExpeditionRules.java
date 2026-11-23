@@ -2,7 +2,9 @@ package org.bogomips.treasureInc.engine.expedition;
 
 import jakarta.enterprise.context.ApplicationScoped;
 
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /** The game rules of an expedition: what is valid, what it costs and what it brings back. */
 @ApplicationScoped
@@ -31,8 +33,24 @@ class ExpeditionRules {
         return difficulty >= 1 && difficulty <= config.maxDifficulty();
     }
 
+    /** {@code difficulty * costPerFloor * level}; nothing for a location of level 1, so a broke player can go on. */
     int cost(String location, int difficulty) {
-        return difficulty * config.costPerFloor() * level(location);
+        int level = level(location);
+        return level <= 1 ? 0 : difficulty * config.costPerFloor() * level;
+    }
+
+    /**
+     * The chances of each item rarity in the chests of a location, in per mille from common to legendary.
+     *
+     * @throws IllegalStateException when the configuration does not give five chances adding up to 1000
+     */
+    List<Integer> loot(String location) {
+        List<Integer> loot = config.locations().get(location).loot();
+        if (loot.size() != 5 || loot.stream().anyMatch(c -> c < 0)
+                || loot.stream().mapToInt(Integer::intValue).sum() != 1000) {
+            throw new IllegalStateException("loot of " + location + " must be 5 chances adding up to 1000: " + loot);
+        }
+        return loot;
     }
 
     /**
@@ -49,7 +67,23 @@ class ExpeditionRules {
      * {@code difficulty * xpPerFloor * level * (1 + 0.25 * rarity)}, rounded down.
      */
     int xp(String location, int difficulty, int rarity) {
-        return difficulty * config.xpPerFloor() * level(location) * (4 + rarity) / 4;
+        return xpAtLevel(level(location), difficulty, rarity);
+    }
+
+    /** Like {@link #xp}, for a level rather than a location (an event). */
+    int xpAtLevel(int level, int difficulty, int rarity) {
+        return difficulty * config.xpPerFloor() * level * (4 + rarity) / 4;
+    }
+
+    /** The rarity chances of the first location of the story of this level; null when there is none. */
+    List<Integer> lootAtLevel(int level) {
+        return config.locations().entrySet().stream()
+                .filter(e -> e.getValue().level() == level)
+                .map(Map.Entry::getKey)
+                .sorted()
+                .findFirst()
+                .map(this::loot)
+                .orElse(null);
     }
 
     /**

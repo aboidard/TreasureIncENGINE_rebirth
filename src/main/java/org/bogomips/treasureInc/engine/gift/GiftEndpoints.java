@@ -53,7 +53,7 @@ class GiftEndpoints {
     /** Puts a gift in the box of the players matching the target (administration, see the class). */
     @Produces
     RequestHandler sendGift() {
-        return RequestHandler.of("sendGift", this::send);
+        return RequestHandler.admin("sendGift", this::send);
     }
 
     private Uni<Object> list(JsonNode params) {

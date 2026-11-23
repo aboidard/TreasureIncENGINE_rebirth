@@ -66,6 +66,12 @@ Types de requête (`payload.type`) et paramètres (`payload.params`) :
 | `healthcheck` | — | `{name, status, data, checks: [{name, status}]}` (checks de readiness : base, Redis) |
 | `forceSync` | — | 200 `{startedAt, durationMs, syncedUsers, errors}` (administration, voir « Synchronisation forcée ») |
 | `sendGift` | `title`, `reward`, `players` (optionnel), `expiresInDays` (optionnel) | 200 `{batch, sent}` · 400 avec la raison (administration, voir « Boîte à cadeaux ») |
+| `getSettings` | — | 200 `{maintenance: {enabled, active, reason, start, end}, minClientVersion, updatedAt}` (administration, voir « Maintenance et version du client ») |
+| `setMaintenance` | `enabled`, `reason` (obligatoire pour activer), `start`, `end` (ISO-8601, optionnels) | 200 les réglages · 400 avec la raison (administration) |
+| `setMinClientVersion` | `version` (ex. `0.22`) | 200 les réglages · 400 (administration) |
+
+Pendant une maintenance, toute requête du jeu reçoit **503** `{status: 503, message: <raison>, payload: {maintenance, retryAfter}}`
+sans atteindre son handler (`retryAfter` : secondes jusqu'à la fin prévue, `null` sans fin prévue).
 
 Un paramètre manquant ou invalide renvoie 400.
 
@@ -318,7 +324,7 @@ Chaque tirage choisit d'abord un **rang** selon la table ci-dessous, puis un per
 Ajouter un personnage : une ligne dans `CharacterCatalog` (les numéros ne changent jamais) et son portrait dans le client.
 
 Le schéma se met à jour avec `src/main/resources/db/update_001_equipment.sql`, `update_002_recruitment.sql`, `update_003_xp.sql`, `update_004_armor_sprites.sql` (redonne un sprite d'armure aux
-armures générées avec un sprite de casque ou de bottes) puis `update_005_gems_gifts.sql` (colonne `users.gems` et table `gifts`).
+armures générées avec un sprite de casque ou de bottes) puis `update_005_gems_gifts.sql` (colonne `users.gems` et table `gifts`) et `update_006_settings.sql` (table `app_settings` : maintenance, version minimale du client).
 
 ### Quêtes
 
@@ -436,6 +442,23 @@ l'API ne relaie que les requêtes du jeu.
 
 Il faut au moins une gemme, une pièce ou un objet. La réponse donne l'identifiant de l'envoi (`batch`, écrit sur
 chaque cadeau) et le nombre de joueurs qui l'ont reçu (`sent`) ; une requête invalide reçoit 400 avec la raison.
+
+### Maintenance et version du client
+
+Les réglages du jeu sont changés depuis Maestro (onglet « Maintenance » de l'admin) par les requêtes d'administration
+`getSettings`, `setMaintenance` et `setMinClientVersion` (envoyées par Maestro seul, sur le canal Redis des requêtes).
+
+- **Stockage** : la table `app_settings` (une seule ligne, `update_006_settings.sql`) les garde ; le moteur les recopie
+  dans la clé Redis `treasure_inc.settings` (JSON, sans expiration), que **l'API lit directement** : elle connaît donc la
+  maintenance même quand le moteur est arrêté. Si Redis les a perdus, le moteur les relit en base et les y remet.
+- **Instances** : chaque instance du moteur garde les réglages en mémoire, relus dans Redis toutes les
+  `engine.settings.refresh` (5 s) : un changement fait sur une instance atteint les autres dans ce délai.
+- **Maintenance** : activée (`enabled`), elle s'applique de `start` (tout de suite si absent) à `end` (jusqu'à ce qu'on
+  la coupe si absent) ; passé `end`, le jeu reprend tout seul. Pendant ce temps, le dispatcher répond 503 avec la raison
+  à toute requête du jeu (connexion, création de joueur, expéditions…). Les requêtes d'administration
+  (`RequestHandler.admin` : `healthcheck`, `forceSync`, `sendGift`, réglages) restent servies.
+- **Version minimale du client** (`minClientVersion`, `0` : toutes) : l'API la donne dans son `/healthcheck` ; le
+  client Unity compare son `Application.version` et refuse la connexion en invitant à mettre l'application à jour.
 
 ### Observabilité
 - Logs structurés `clé=valeur` (lisibles et exploitables dans Kibana), JSON en production, **masquage automatique** des champs sensibles et troncature des charges volumineuses.
