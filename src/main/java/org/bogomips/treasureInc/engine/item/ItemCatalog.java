@@ -46,6 +46,19 @@ class ItemCatalog {
             return LEGENDARY;
         }
 
+        /**
+         * @param roll    a number in 1..1000
+         * @param weights the chances of each rarity in per mille, from common to legendary, adding up to 1000
+         */
+        public static Rarity fromRoll(int roll, List<Integer> weights) {
+            int threshold = 0;
+            for (int i = 0; i < weights.size() && i < values().length; i++) {
+                threshold += weights.get(i);
+                if (roll <= threshold) return values()[i];
+            }
+            return values()[values().length - 1];
+        }
+
         /** Unknown or null values fall back to COMMON, like the original generator. */
         public static Rarity fromValue(String value) {
             for (Rarity r : values()) {
@@ -219,6 +232,11 @@ class ItemCatalog {
      */
     public ItemInfo generate(int id) {
         return generate(id, Rarity.fromRoll(random.nextInt(1000) + 1));
+    }
+
+    /** Like {@link #generate(int)}, the rarity being drawn from these chances (see {@link Rarity#fromRoll(int, List)}). */
+    public ItemInfo generate(int id, List<Integer> rarityWeights) {
+        return generate(id, Rarity.fromRoll(random.nextInt(1000) + 1, rarityWeights));
     }
 
     /** An item of this rarity, otherwise made like {@link #generate(int)}. */

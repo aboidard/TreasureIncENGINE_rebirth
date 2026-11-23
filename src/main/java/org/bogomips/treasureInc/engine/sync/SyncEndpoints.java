@@ -29,7 +29,7 @@ class SyncEndpoints {
 
     @Produces
     RequestHandler forceSync() {
-        return RequestHandler.of("forceSync", this::forceSync);
+        return RequestHandler.admin("forceSync", this::forceSync);
     }
 
     private Uni<Object> forceSync(JsonNode params) {

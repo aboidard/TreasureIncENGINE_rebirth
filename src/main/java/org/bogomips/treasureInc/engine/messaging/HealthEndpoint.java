@@ -48,6 +48,12 @@ class HealthEndpoint implements RequestHandler {
         return "healthcheck";
     }
 
+    /** Answered during a maintenance too. */
+    @Override
+    public boolean admin() {
+        return true;
+    }
+
     @Override
     public Uni<Object> handle(JsonNode params) {
         Uni<Map<String, Object>> liveness = Uni.createFrom().item(() -> toMap(check.call()))

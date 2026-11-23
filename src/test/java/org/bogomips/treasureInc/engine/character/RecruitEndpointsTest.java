@@ -307,7 +307,7 @@ class RecruitEndpointsTest {
         JsonNode draws = r.at("/payload/draws");
         assertEquals(1, draws.size());
         assertEquals(20, draws.at("/0/num").asInt());
-        assertEquals("L'Oracle aux Mille Clés", draws.at("/0/name").asText());
+        assertEquals("Malphas le Cornu", draws.at("/0/name").asText());
         assertEquals("SSS", draws.at("/0/rank").asText());
         assertTrue(draws.at("/0/isNew").asBoolean());
         assertEquals(1, draws.at("/0/copies").asInt());

@@ -3,6 +3,7 @@ package org.bogomips.treasureInc.engine.expedition;
 import io.smallrye.config.ConfigMapping;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 
 /** Expedition settings ("engine.expeditions" in application.yml). A new location only needs a new line there. */
@@ -36,7 +37,14 @@ public interface ExpeditionConfig {
     Map<String, Location> locations();
 
     interface Location {
+        /** The difficulty of the location, from 1: what is met there grows with it. A location of level 1 is free. */
         int level();
+
+        /**
+         * The chances of each item rarity in the chests brought back from there, in per mille, from common to
+         * legendary: five numbers adding up to 1000.
+         */
+        List<Integer> loot();
     }
 
     /** What may stand in the way of a character on each floor (see ExpeditionRun). The chances are in percent. */

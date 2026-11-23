@@ -3,6 +3,7 @@ package org.bogomips.treasureInc.engine.expedition;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -74,7 +75,21 @@ class ExpeditionRulesTest {
             }
 
             public Map<String, Location> locations() {
-                return Map.of("mordak", () -> 1, "gardakan", () -> 2, "bobafett", () -> 3);
+                return Map.of("mordak", location(1, 880, 110, 10, 0, 0),
+                        "gardakan", location(2, 650, 200, 140, 9, 1),
+                        "bobafett", location(3, 450, 280, 220, 45, 5));
+            }
+        };
+    }
+
+    static ExpeditionConfig.Location location(int level, Integer... loot) {
+        return new ExpeditionConfig.Location() {
+            public int level() {
+                return level;
+            }
+
+            public List<Integer> loot() {
+                return List.of(loot);
             }
         };
     }
@@ -114,10 +129,37 @@ class ExpeditionRulesTest {
 
     @Test
     void costDependsOnDifficultyAndLocation() {
-        assertEquals(100, rules.cost("mordak", 1));
-        assertEquals(1000, rules.cost("mordak", 10));
         assertEquals(1000, rules.cost("gardakan", 5));
         assertEquals(3000, rules.cost("bobafett", 10));
+    }
+
+    @Test
+    void theFirstLevelIsFree() {
+        assertEquals(0, rules.cost("mordak", 1));
+        assertEquals(0, rules.cost("mordak", 10));
+    }
+
+    @Test
+    void lootGetsBetterWithTheLevel() {
+        assertEquals(List.of(880, 110, 10, 0, 0), rules.loot("mordak"));
+        assertEquals(ExpeditionService.STANDARD_LOOT, rules.loot("gardakan"));
+        assertEquals(List.of(450, 280, 220, 45, 5), rules.loot("bobafett"));
+    }
+
+    @Test
+    void aBadLootTableIsRefused() {
+        ExpeditionConfig bad = new ExpeditionConfig() {
+            public Obstacles obstacles() { return NO_OBSTACLE; }
+            public int gridSize() { return 18; }
+            public int maxDifficulty() { return 10; }
+            public int maxItems() { return 15; }
+            public int costPerFloor() { return 100; }
+            public int xpPerFloor() { return 10; }
+            public Duration digTtl() { return Duration.ofHours(24); }
+            public Duration ttl() { return Duration.ofDays(7); }
+            public Map<String, Location> locations() { return Map.of("mordak", location(1, 900, 50)); }
+        };
+        assertThrows(IllegalStateException.class, () -> new ExpeditionRules(bad).loot("mordak"));
     }
 
     @Test

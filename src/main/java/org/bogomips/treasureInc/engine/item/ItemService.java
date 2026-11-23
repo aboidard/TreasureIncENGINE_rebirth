@@ -101,7 +101,7 @@ public class ItemService {
      * Call it inside the user's {@link UserService.Lock}.
      */
     public Uni<List<ItemInfo>> generateLocked(String publicKey, String privateKey, int count) {
-        return generateLocked(publicKey, privateKey, count, null);
+        return generateLocked(publicKey, privateKey, count, (String) null);
     }
 
     /**
@@ -110,6 +110,21 @@ public class ItemService {
      */
     public Uni<List<ItemInfo>> generateLocked(String publicKey, String privateKey, int count, String rarityValue) {
         ItemCatalog.Rarity rarity = rarityValue == null ? null : ItemCatalog.Rarity.fromValue(rarityValue);
+        return generateLocked(publicKey, privateKey, count,
+                id -> rarity == null ? catalog.generate(id) : catalog.generate(id, rarity));
+    }
+
+    /**
+     * Like {@link #generateLocked(String, String, int)}, the rarity of each item being drawn from these chances, in
+     * per mille from common to legendary (an expedition's chest: see {@link ItemCatalog.Rarity#fromRoll(int, List)}).
+     */
+    public Uni<List<ItemInfo>> generateLocked(String publicKey, String privateKey, int count,
+                                              List<Integer> rarityWeights) {
+        return generateLocked(publicKey, privateKey, count, id -> catalog.generate(id, rarityWeights));
+    }
+
+    private Uni<List<ItemInfo>> generateLocked(String publicKey, String privateKey, int count,
+                                               java.util.function.IntFunction<ItemInfo> generator) {
         return users.openSession(publicKey, privateKey).flatMap(user -> {
             if (user == null) {
                 return Uni.createFrom().nullItem();
@@ -119,8 +134,7 @@ public class ItemService {
                 return Uni.createFrom().item(List.<ItemInfo>of());
             }
             return newIds(count).flatMap(ids -> {
-                List<ItemInfo> generated = ids.stream()
-                        .map(id -> rarity == null ? catalog.generate(id) : catalog.generate(id, rarity)).toList();
+                List<ItemInfo> generated = ids.stream().map(generator::apply).toList();
                 return list(publicKey).flatMap(current -> {
                     List<ItemInfo> all = new ArrayList<>(current.userFound() ? current.items() : List.of());
                     all.addAll(generated);

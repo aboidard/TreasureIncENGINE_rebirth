@@ -10,7 +10,12 @@ import org.bogomips.treasureInc.engine.messaging.Protocol;
 import org.bogomips.treasureInc.engine.messaging.RequestHandler;
 import org.bogomips.treasureInc.engine.user.UserService.SpendResult;
 
+import org.bogomips.treasureInc.engine.events.EventService;
+import org.bogomips.treasureInc.engine.events.GameEvent;
+import org.bogomips.treasureInc.engine.user.UserService;
+
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /** Expedition request types: validates params, calls the services and shapes the reply. */
@@ -20,11 +25,35 @@ class ExpeditionEndpoints {
     private final ExpeditionService expeditions;
     private final ExpeditionRules rules;
     private final CharacterService characters;
+    private final EventService events;
+    private final UserService users;
 
-    ExpeditionEndpoints(ExpeditionService expeditions, ExpeditionRules rules, CharacterService characters) {
+    ExpeditionEndpoints(ExpeditionService expeditions, ExpeditionRules rules, CharacterService characters,
+                        EventService events, UserService users) {
         this.expeditions = expeditions;
         this.rules = rules;
         this.characters = characters;
+        this.events = events;
+        this.users = users;
+    }
+
+    /**
+     * The events open now, for a player: {"events": [{code, name, description, image, level, floors,
+     * rewards: {gems, money, items}, maxPerDay, runsToday, remainingToday, end}]}.
+     */
+    @Produces
+    RequestHandler getEvents() {
+        return RequestHandler.of("getEvents", this::events);
+    }
+
+    /**
+     * params: {user, private_key, event, character}: sends the character to an open event, for free; the reply is
+     * that of startExpedition. 404 when the event is not open, 429 when the player already went there as many times
+     * today as the event allows.
+     */
+    @Produces
+    RequestHandler startEventExpedition() {
+        return RequestHandler.of("startEventExpedition", this::startEvent);
     }
 
     /** Reveals the rarity of a case, for the cost given by the client. */
@@ -91,7 +120,41 @@ class ExpeditionEndpoints {
                 || (hasCase && (caseId == null || !rules.isValidCase(caseId)))) {
             return Uni.createFrom().item(Protocol.badRequest());
         }
-        return expeditions.start(publicKey, privateKey, location, difficulty, caseId, character).map(result -> {
+        return expeditions.start(publicKey, privateKey, location, difficulty, caseId, character)
+                .map(ExpeditionEndpoints::startReply);
+    }
+
+    private Uni<Object> events(JsonNode params) {
+        String publicKey = Protocol.publicKey(params);
+        String privateKey = Protocol.text(params, "private_key");
+        if (publicKey == null || privateKey == null) {
+            return Uni.createFrom().item(Protocol.badRequest());
+        }
+        List<GameEvent> open = events.open();
+        return users.openSession(publicKey, privateKey).flatMap(user -> user == null
+                ? Uni.createFrom().item(Protocol.unauthorized())
+                : events.runsToday(publicKey, open).map(runs -> Protocol.reply(200, "OK", Map.of("events",
+                        open.stream().map(e -> e.toPlayerMap(runs.getOrDefault(e.code(), 0))).toList()))));
+    }
+
+    private Uni<Object> startEvent(JsonNode params) {
+        String publicKey = Protocol.publicKey(params);
+        String privateKey = Protocol.text(params, "private_key");
+        String code = Protocol.text(params, "event");
+        Integer character = required(params, "character");
+        if (publicKey == null || privateKey == null || code == null || character == null
+                || !characters.isValid(character)) {
+            return Uni.createFrom().item(Protocol.badRequest());
+        }
+        GameEvent event = events.openEvent(code);
+        if (event == null) {
+            return Uni.createFrom().item(Protocol.reply(404, "Event not found or closed"));
+        }
+        return expeditions.startEvent(publicKey, privateKey, event, character).map(ExpeditionEndpoints::startReply);
+    }
+
+    private static Object startReply(ExpeditionService.StartResult result) {
+        {
             if (result.status() == SpendResult.Status.UNAUTHORIZED) {
                 return Protocol.unauthorized();
             }
@@ -104,6 +167,9 @@ class ExpeditionEndpoints {
             if (result.unknownCharacter()) {
                 return Protocol.reply(404, "Character not found");
             }
+            if (result.limitReached()) {
+                return Protocol.reply(429, "Already done today", Map.of("money", result.money()));
+            }
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("expeditionId", result.expedition().id());
             payload.put("character", result.expedition().character());
@@ -111,8 +177,9 @@ class ExpeditionEndpoints {
             payload.put("itemCount", result.expedition().itemCount());
             payload.put("xp", result.expedition().xp());
             payload.put("run", result.run().toMap());
+            payload.put("floors", result.expedition().difficulty());
             return Protocol.reply(200, "OK", payload);
-        });
+        }
     }
 
     private Uni<Object> open(JsonNode params) {
@@ -131,6 +198,11 @@ class ExpeditionEndpoints {
                 payload.put("xp", result.xp() == null ? null : result.xp().toMap());
                 payload.put("floors", result.expedition().difficulty());
                 payload.put("floorsCompleted", result.expedition().completed());
+                // what an event's chest gives besides the items, and the balances afterwards
+                payload.put("gems", result.gems());
+                payload.put("money", result.money());
+                payload.put("balance", result.balance() == null ? null
+                        : Map.of("money", result.balance().money(), "gems", result.balance().gems()));
                 yield Protocol.reply(200, "OK", payload);
             }
         });

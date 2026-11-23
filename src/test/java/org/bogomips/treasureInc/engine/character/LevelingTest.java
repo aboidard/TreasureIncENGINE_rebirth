@@ -76,7 +76,7 @@ class LevelingTest {
 
     @Test
     void thePointsFollowTheProfileOfTheCharacter() {
-        // Zeph l'artificier, rank B (3 points a level): 9 strength, 3 constitution, 3 agility, 4 luck
+        // Rouage le chevalier mécanique, rank B (3 points a level): 9 strength, 3 constitution, 3 agility, 4 luck
         Info zeph = CharacterCatalog.get(12);
         // level 20: 19 levels gained, 57 points, shared as 9/19, 3/19, 3/19 and 4/19
         assertEquals(Map.of("for", 9 + 27, "con", 3 + 9, "agi", 3 + 9, "luk", 4 + 12), Leveling.stats(zeph, 20));
@@ -86,7 +86,7 @@ class LevelingTest {
     void aBetterRankGainsMore() {
         assertEquals(1, Leveling.pointsPerLevel(CharacterCatalog.Rank.D));
         assertEquals(7, Leveling.pointsPerLevel(CharacterCatalog.Rank.SSS));
-        // Bébert has no luck: he never gains any
+        // Durgan has no luck: he never gains any
         assertEquals(0, Leveling.stats(CharacterCatalog.get(6), 100).get("luk"));
     }
 }

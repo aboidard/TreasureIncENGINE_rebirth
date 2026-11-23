@@ -34,7 +34,9 @@ class RequestDispatcherTest {
     void everyRequestTypeIsRegistered() {
         assertEquals(Set.of("healthcheck", "getItems", "getPrivateItems", "generateItemsForUser", "sellItems",
                 "createUser", "login", "digCase", "startExpedition", "getCharacters", "equipItem", "unequipItem",
-                "getPortals", "recruit", "getQuests", "claimQuest", "forceSync", "getGifts", "claimGift", "sendGift"),
+                "getPortals", "recruit", "getQuests", "claimQuest", "forceSync", "getGifts", "claimGift", "sendGift",
+                "getSettings", "setMaintenance", "setMinClientVersion", "getEvents", "startEventExpedition",
+                "listEvents", "saveEvent", "deleteEvent"),
                 dispatcher.knownTypes());
     }
 
