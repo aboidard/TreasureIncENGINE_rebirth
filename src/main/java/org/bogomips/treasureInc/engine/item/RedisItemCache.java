@@ -13,9 +13,7 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.bogomips.treasureInc.engine.item.ItemService.ItemList;
 
 import java.util.Collection;
-import java.util.HashSet;
 import java.util.List;
-import java.util.stream.Collectors;
 
 /**
  * One key per user ("treasure_inc.items.&lt;publicKey&gt;") with a TTL, so lists requested through the
@@ -80,16 +78,12 @@ class RedisItemCache implements ItemService.Cache {
 
     @Override
     public Uni<Void> removeIds(String publicKey, Collection<Integer> ids) {
-        HashSet<Integer> toRemove = new HashSet<>(ids);
         return get(publicKey).flatMap(list -> {
             if (list == null || !list.userFound()) {
                 return Uni.createFrom().voidItem();
             }
-            ItemList remaining = new ItemList(true,
-                    list.items().stream().filter(i -> !toRemove.contains(i.id())).toList(),
-                    list.pendingIds().stream().filter(id -> !toRemove.contains(id)).collect(Collectors.toSet()));
             // KEEPTTL: do not make a persistent list (one holding pending items) expire
-            return write(remaining).flatMap(json -> values.set(key(publicKey), json, new SetArgs().keepttl()));
+            return write(list.without(ids)).flatMap(json -> values.set(key(publicKey), json, new SetArgs().keepttl()));
         });
     }
 

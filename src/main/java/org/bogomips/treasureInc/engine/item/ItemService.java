@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.random.RandomGenerator;
+import java.util.stream.Collectors;
 
 @ApplicationScoped
 public class ItemService {
@@ -140,7 +141,7 @@ public class ItemService {
                     all.addAll(generated);
                     Set<Integer> pending = new HashSet<>(current.pendingIds());
                     pending.addAll(ids);
-                    return itemCache.persist(publicKey, new ItemList(true, all, pending))
+                    return itemCache.persist(publicKey, new ItemList(true, all, pending, current.insertingIds()))
                             .flatMap(v -> users.markDirty(publicKey))
                             .replaceWith(generated);
                 });
@@ -178,8 +179,10 @@ public class ItemService {
     /**
      * The whole operation runs under the user's lock, so two concurrent sells/generations cannot overwrite each other.
      * Sells from the Redis list. Items are validated against the cached list; pending items (not yet inserted)
-     * never touch the database. The database is only called when database items are sold, or when the user
-     * has no cached session to credit (the pending items' value is then added in the same transaction).
+     * never touch the database, except those an interrupted synchronization may have written (see
+     * {@link ItemList#insertingIds}), which are deleted from it first. Otherwise the database is only called when
+     * database items are sold, or when the user has no cached session to credit (the pending items' value is then
+     * added in the same transaction).
      */
     public Uni<SellResult> sell(String publicKey, String privateKey, List<Integer> ids) {
         return lock.withLock(publicKey, () -> sellLocked(publicKey, privateKey, ids).flatMap(result ->
@@ -203,10 +206,14 @@ public class ItemService {
                 Set<Integer> pending = list.pendingIds();
                 List<Integer> dbIds = ids.stream().filter(id -> !pending.contains(id)).toList();
                 int redisTotal = ids.stream().filter(pending::contains).mapToInt(id -> price(byId.get(id))).sum();
-                if (dbIds.isEmpty()) {
-                    return sellRedisOnly(publicKey, privateKey, ids, redisTotal);
-                }
-                return sellWithDatabase(publicKey, privateKey, ids, dbIds, redisTotal);
+                List<Integer> maybeWritten = ids.stream().filter(list.insertingIds()::contains).toList();
+                // deleted before the user is credited: if the sale fails afterwards, the items are still pending
+                // and the next synchronization writes them again
+                Uni<Void> cleanup = maybeWritten.isEmpty() ? Uni.createFrom().voidItem()
+                        : repository.deleteByIds(user.id(), maybeWritten);
+                return cleanup.flatMap(v -> dbIds.isEmpty()
+                        ? sellRedisOnly(publicKey, privateKey, ids, redisTotal)
+                        : sellWithDatabase(publicKey, privateKey, ids, dbIds, redisTotal));
             }));
         });
     }
@@ -245,15 +252,24 @@ public class ItemService {
     /**
      * All the items of a user; userFound=false is a cached "unknown public key" marker.
      * pendingIds are the generated items not yet written to the database (the next synchronization inserts them,
-     * keeping their id).
+     * keeping their id). insertingIds are those among them a synchronization started to insert without confirming
+     * it: the database may or may not have them.
      */
     public record ItemList(
             @JsonProperty("userFound") boolean userFound,
             @JsonProperty("items") List<ItemInfo> items,
-            @JsonProperty("pendingIds") Set<Integer> pendingIds) {
+            @JsonProperty("pendingIds") Set<Integer> pendingIds,
+            @JsonProperty("insertingIds") Set<Integer> insertingIds) {
 
         public ItemList {
             pendingIds = pendingIds == null ? Set.of() : Set.copyOf(pendingIds);
+            // absent from the lists cached before this field existed
+            insertingIds = insertingIds == null ? Set.of() : Set.copyOf(insertingIds);
+        }
+
+        /** A list with no insertion under way. */
+        public ItemList(boolean userFound, List<ItemInfo> items, Set<Integer> pendingIds) {
+            this(userFound, items, pendingIds, Set.of());
         }
 
         /** A list with nothing waiting for the database, as read from it. */
@@ -263,6 +279,17 @@ public class ItemService {
 
         public static ItemList unknownUser() {
             return new ItemList(false, List.of());
+        }
+
+        /** A copy without these items. */
+        public ItemList without(Collection<Integer> ids) {
+            Set<Integer> removed = new HashSet<>(ids);
+            return new ItemList(userFound, items.stream().filter(i -> !removed.contains(i.id())).toList(),
+                    minus(pendingIds, removed), minus(insertingIds, removed));
+        }
+
+        private static Set<Integer> minus(Set<Integer> ids, Set<Integer> removed) {
+            return ids.stream().filter(id -> !removed.contains(id)).collect(Collectors.toSet());
         }
     }
 
@@ -293,7 +320,10 @@ public class ItemService {
         /** Takes {@code count} values from the items id sequence in one round trip: unique, not always consecutive. */
         Uni<List<Integer>> nextIds(int count);
 
-        /** Inserts pending items for the user, with the ids they already have. */
+        /**
+         * Inserts pending items for the user, with the ids they already have. Those the user already has in the
+         * database are left alone, so an interrupted synchronization can be run again.
+         */
         Uni<Void> insertAll(int userId, List<ItemInfo> items);
 
         Uni<Void> deleteByIds(int userId, List<Integer> ids);
