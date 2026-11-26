@@ -11,6 +11,8 @@ import org.bogomips.treasureInc.engine.user.User;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @ApplicationScoped
 class PanacheItemRepository implements ItemService.Repository {
@@ -53,7 +55,17 @@ class PanacheItemRepository implements ItemService.Repository {
             e.updatedAt = now;
             return e;
         }).toList();
-        return Panache.withTransaction(() -> Item.persist(entities));
+        if (entities.isEmpty()) {
+            return Uni.createFrom().voidItem();
+        }
+        List<Integer> ids = entities.stream().map(e -> e.id).toList();
+        // only the user's own rows are skipped: an id held by another user still fails on the primary key
+        return Panache.withTransaction(() -> Item.<Item>list("userId = ?1 and id in ?2", userId, ids)
+                .flatMap(existing -> {
+                    Set<Integer> written = existing.stream().map(e -> e.id).collect(Collectors.toSet());
+                    List<Item> missing = entities.stream().filter(e -> !written.contains(e.id)).toList();
+                    return missing.isEmpty() ? Uni.createFrom().voidItem() : Item.persist(missing);
+                }));
     }
 
     @Override

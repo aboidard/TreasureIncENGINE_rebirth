@@ -165,7 +165,11 @@ public class CacheSyncService {
             }
             List<ItemInfo> pending = list.items().stream().filter(i -> list.pendingIds().contains(i.id())).toList();
             Set<Integer> ids = pending.stream().map(ItemInfo::id).collect(Collectors.toSet());
-            return itemRepository.insertAll(userId, pending)
+            // noted in Redis before writing: should we fail before markInserted, a sale knows the database may
+            // hold these items
+            ItemList inserting = new ItemList(true, list.items(), list.pendingIds(), ids);
+            return itemCache.persist(publicKey, inserting)
+                    .flatMap(v -> itemRepository.insertAll(userId, pending))
                     .flatMap(v -> markInserted(publicKey, userId, ids))
                     .replaceWith(pending.size());
         });
@@ -185,7 +189,9 @@ public class CacheSyncService {
             List<Integer> sold = inserted.stream().filter(id -> !stillThere.contains(id)).toList();
             Set<Integer> pending = fresh.pendingIds().stream().filter(id -> !inserted.contains(id))
                     .collect(Collectors.toSet());
-            ItemList updated = new ItemList(true, fresh.items(), pending);
+            Set<Integer> inserting = fresh.insertingIds().stream().filter(id -> !inserted.contains(id))
+                    .collect(Collectors.toSet());
+            ItemList updated = new ItemList(true, fresh.items(), pending, inserting);
             // the list may expire again once nothing in it is missing from the database
             Uni<Void> write = pending.isEmpty() ? itemCache.put(publicKey, updated) : itemCache.persist(publicKey, updated);
             return write.flatMap(v -> itemRepository.deleteByIds(userId, sold));

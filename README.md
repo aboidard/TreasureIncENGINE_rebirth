@@ -83,6 +83,8 @@ Le compromis est assumé : peu d'écritures en base pendant le jeu, et une fenê
 Un objet généré reçoit tout de suite son **id définitif**, pris dans la séquence PostgreSQL `items_id_seq` : il ne change pas quand l'objet est écrit en base, et le client peut le vendre avant comme après la synchronisation.
 Pour ne pas solliciter la base à chaque génération, les ids sont réservés **par blocs** (`engine.items.id-block-size`, 100 par défaut) en un seul appel (`nextval` sur un `generate_series`) ; ceux qui ne servent pas tout de suite attendent dans une liste Redis partagée par toutes les instances.
 
+Une synchronisation interrompue (panne entre l'insertion en base et la mise à jour de Redis) est simplement rejouée : les objets déjà écrits sont ignorés. Avant d'écrire, les ids concernés sont notés dans la liste Redis (`insertingIds`) : si le joueur en vend un entre-temps, sa ligne est aussi supprimée de la base.
+
 #### Synchronisation forcée
 La requête `forceSync` écrit **tout de suite** en base chaque session qui a des changements en attente (`dirty`), sans attendre `engine.sync.max-age`, et n'évince rien.
 Chaque joueur est traité sous son verrou, sur une copie fraîche de la session, exactement comme par le job planifié ;

@@ -36,6 +36,9 @@ class ItemEndpointsTest {
             new ItemInfo(2, "b", "d", 2, 250, "rare", "t", "t"),
             new ItemInfo(3, "c", "d", 3, 50, "common", "t", "t")));
     private int dbMoney = 1000;
+    // simulates a Redis failure striking right after the items reached the database
+    private boolean failCacheAfterInsert;
+    private boolean cacheDown;
     private int syncedMoney = -1;
     // a user whose balance cannot be written to the "database"
     private int failingUserId = -1;
@@ -61,8 +64,13 @@ class ItemEndpointsTest {
 
         public Uni<Void> insertAll(int userId, List<ItemInfo> items) {
             for (ItemInfo i : items) {
+                // as the contract says: an item already written is left alone
+                if (dbItems.stream().anyMatch(d -> d.id() == i.id())) {
+                    continue;
+                }
                 dbItems.add(new ItemInfo(i.id(), i.name(), i.resolvedDescription(), i.graphics(), i.price(), i.rarity(), "t", "t"));
             }
+            cacheDown = failCacheAfterInsert;
             return Uni.createFrom().voidItem();
         }
 
@@ -93,11 +101,13 @@ class ItemEndpointsTest {
         }
 
         public Uni<Void> put(String pk, ItemList l) {
-            itemCache.put(pk, l);
-            return Uni.createFrom().voidItem();
+            return persist(pk, l);
         }
 
         public Uni<Void> persist(String pk, ItemList l) {
+            if (cacheDown) {
+                return Uni.createFrom().failure(new IllegalStateException("redis down"));
+            }
             itemCache.put(pk, l);
             return Uni.createFrom().voidItem();
         }
@@ -127,8 +137,7 @@ class ItemEndpointsTest {
         public Uni<Void> removeIds(String pk, Collection<Integer> ids) {
             ItemList l = itemCache.get(pk);
             if (l != null) {
-                itemCache.put(pk, new ItemList(l.userFound(), l.items().stream().filter(i -> !ids.contains(i.id())).toList(),
-                        l.pendingIds().stream().filter(id -> !ids.contains(id)).collect(java.util.stream.Collectors.toSet())));
+                itemCache.put(pk, l.without(ids));
             }
             return Uni.createFrom().voidItem();
         }
@@ -336,6 +345,56 @@ class ItemEndpointsTest {
         assertEquals(200, r.get("status").asInt());
         assertEquals(1, dbSells.get(), "the item is in the database now, so the sale goes through it");
         assertTrue(dbItems.stream().noneMatch(i -> i.id() == id));
+    }
+
+    /** A sync that dies between the database insert and the update of the Redis list. */
+    private CacheSyncService interruptedSync() {
+        CacheSyncService sync = new CacheSyncService(userCache, cache, userRepo, itemRepo, lock, crewStore,
+                java.time.Duration.ofMinutes(3), java.time.Duration.ofHours(1));
+        failCacheAfterInsert = true;
+        assertEquals(0, sync.syncDue(java.time.Instant.now().plusSeconds(181)).await().indefinitely());
+        failCacheAfterInsert = false;
+        cacheDown = false;
+        return sync;
+    }
+
+    @Test
+    void anInterruptedSyncIsCompletedByTheNextOne() {
+        String justNow = java.time.Instant.now().toString();
+        users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), justNow, CachedSession.hashKey(PRIV)));
+        int id = generate(1).at("/payload/items/0/id").asInt();
+
+        CacheSyncService sync = interruptedSync();
+        assertTrue(users.get(PUB).dirty());
+        assertTrue(itemCache.get(PUB).pendingIds().contains(id));
+        // generated after the failure: it must not stay stuck behind the first one
+        int later = generate(1).at("/payload/items/0/id").asInt();
+
+        assertEquals(1, sync.syncDue(java.time.Instant.now().plusSeconds(181)).await().indefinitely());
+        assertFalse(users.get(PUB).dirty());
+        assertTrue(itemCache.get(PUB).pendingIds().isEmpty());
+        assertTrue(itemCache.get(PUB).insertingIds().isEmpty());
+        assertEquals(1, dbItems.stream().filter(i -> i.id() == id).count());
+        assertEquals(1, dbItems.stream().filter(i -> i.id() == later).count());
+    }
+
+    @Test
+    void anItemSoldAfterAnInterruptedSyncLeavesTheDatabase() throws Exception {
+        String justNow = java.time.Instant.now().toString();
+        users.put(PUB, new CachedSession(new UserInfo(1, PUB, 1000, "t", "t", "t"), justNow, CachedSession.hashKey(PRIV)));
+        JsonNode gen = generate(1);
+        int id = gen.at("/payload/items/0/id").asInt();
+        int price = gen.at("/payload/items/0/price").asInt();
+        interruptedSync();
+        // the list left by the failed sync is rewritten here: it must keep what it knows
+        generate(1);
+
+        JsonNode r = call(endpoints.sellItems(), "{\"user\":\"" + PUB + "\",\"private_key\":\"secret\",\"items\":[{\"id\":" + id + "}]}");
+        assertEquals(200, r.get("status").asInt());
+        assertEquals(1000 + price, r.at("/payload/money").asInt());
+        assertTrue(dbItems.stream().noneMatch(i -> i.id() == id), "a sold item must not come back");
+        assertTrue(itemCache.get(PUB).items().stream().noneMatch(i -> i.id() == id));
+        assertTrue(itemCache.get(PUB).insertingIds().isEmpty());
     }
 
     @Test

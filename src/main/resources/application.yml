@@ -97,6 +97,11 @@ quarkus:
   application:
     name: maestro
     version: 0.0.6
+  redis:
+    # every Redis command takes a connection of this pool: with the defaults of Quarkus (6 connections, 24 commands
+    # waiting), a burst of requests fails with ConnectionPoolTooBusyException and the API gets no reply
+    max-pool-size: 32
+    max-pool-waiting: 4096
   http:
     port: 8091
     test-port: 8092
